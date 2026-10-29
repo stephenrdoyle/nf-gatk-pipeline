@@ -1,0 +1,60 @@
+title: "GATK Variant Calling Pipeline"
+subtitle: "Variant calling and filtering report"
+intro_text: "Summary of variant calling, filtering, and genotype quality across samples"
+
+custom_data:
+    filter_summary:
+        id: "filter_summary"
+        section_name: "Variant Filter Summary"
+        description: "Variant counts before and after filtering, per filter parameter"
+        file_format: "tsv"
+        plot_type: "table"
+        headers:
+            variant_type:
+                title: "Type"
+            annotation:
+                title: "Annotation"
+            operator:
+                title: "Op"
+            threshold:
+                title: "Threshold"
+            n_total_before:
+                title: "Total (before)"
+                format: "{:,.0f}"
+            n_pass_after:
+                title: "PASS (after)"
+                format: "{:,.0f}"
+            n_flagged:
+                title: "Flagged"
+                format: "{:,.0f}"
+            pct_flagged_overall:
+                title: "% Flagged"
+                suffix: "%"
+    missingness:
+        id: "missingness"
+        section_name: "Per-Sample Missingness"
+        description: "Genotype missingness per sample before and after genotype filtering"
+        file_format: "tsv"
+        plot_type: "table"
+        headers:
+            sample:
+                title: "Sample"
+            total_sites:
+                title: "Total sites"
+                format: "{:,.0f}"
+            n_missing:
+                title: "Missing"
+                format: "{:,.0f}"
+            pct_missing:
+                title: "% Missing"
+                suffix: "%"
+            label:
+                title: "Stage"
+
+sp:
+    filter_summary:
+        fn: "filter_summary.tsv"
+    missingness:
+        fn: "*_missingness.tsv"
+    bcftools/stats:
+        fn: "*_bcftools_stats.txt"

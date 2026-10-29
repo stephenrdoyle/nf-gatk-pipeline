@@ -1,0 +1,4 @@
+sample_id,bam
+SAMPLE_A,/data/bams/sampleA.bam
+SAMPLE_B,/data/bams/sampleB.bam
+SAMPLE_C,/data/bams/sampleC.bam
