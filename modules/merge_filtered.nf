@@ -4,9 +4,6 @@ process MERGE_FILTERED {
 
     publishDir "${params.outdir}", mode: 'copy'
 
-    conda 'bioconda::gatk4=4.6.1.0'
-    container 'broadinstitute/gatk:4.6.1.0'
-
     input:
     tuple path(snp_vcf),   path(snp_tbi)
     tuple path(indel_vcf), path(indel_tbi)

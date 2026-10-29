@@ -4,9 +4,6 @@ process FILTER_SUMMARY {
 
     publishDir "${params.outdir}/filter_reports", mode: 'copy'
 
-    conda 'bioconda::bcftools=1.19 conda-forge::python=3.11'
-    container 'biocontainers/bcftools:1.19--h8b25389_0'
-
     input:
     // Raw (pre-filter) SNP and indel VCFs
     tuple path(raw_snp_vcf),      path(raw_snp_tbi)

@@ -4,9 +4,6 @@ process POOL_ANNOTATE {
 
     publishDir "${params.outdir}", mode: 'copy'
 
-    conda 'bioconda::bcftools=1.19 conda-forge::python=3.11'
-    container 'biocontainers/bcftools:1.19--h8b25389_0'
-
     input:
     tuple path(vcf), path(tbi)
 
