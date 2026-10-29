@@ -19,6 +19,9 @@ process OPTIMISED_FILTER {
     path "${variant_type}_filter_summary.tsv",        emit: summary
 
     script:
+    // Heap tied to the LSF request: without -Xmx the JVM sizes its heap from
+    // the node's RAM, not task.memory, and LSF kills the job (exit 130)
+    def java_opts = "-Xmx${task.memory.toGiga() - 4}g -Dsamjdk.use_intel_deflater=false"
     def lo_pct  = params.filter_percentile_lo as int
     def ann_str = variant_type == 'snps'
                   ? 'QD,MQ,FS,SOR,MQRankSum,ReadPosRankSum'
@@ -29,6 +32,7 @@ process OPTIMISED_FILTER {
     """
     # Extract annotation values from VCF
     gatk VariantsToTable \\
+        --java-options "${java_opts}" \\
         --reference ${reference} \\
         --variant ${vcf} \\
         ${gatk_f} \\
@@ -47,6 +51,7 @@ process OPTIMISED_FILTER {
     # negative numbers and spaces in filter expressions
     source filter_args.sh
     gatk VariantFiltration \\
+        --java-options "${java_opts}" \\
         --reference ${reference} \\
         --variant ${vcf} \\
         "\${FILTER_ARGS[@]}" \\

@@ -16,6 +16,9 @@ process CUSTOM_FILTER {
     path "${variant_type}_filter_summary.tsv", emit: summary
 
     script:
+    // Heap tied to the LSF request: without -Xmx the JVM sizes its heap from
+    // the node's RAM, not task.memory, and LSF kills the job (exit 130)
+    def java_opts = "-Xmx${task.memory.toGiga() - 4}g -Dsamjdk.use_intel_deflater=false"
     // params.snp_filters / params.indel_filters are comma-separated expressions
     // e.g. "QD < 2.0,FS > 60.0"
     def raw_filters = variant_type == 'snps' ? params.snp_filters : params.indel_filters
@@ -34,6 +37,7 @@ process CUSTOM_FILTER {
     }.join('\n')
     """
     gatk VariantFiltration \\
+        --java-options "${java_opts}" \\
         --reference ${reference} \\
         --variant ${vcf} \\
         ${filter_args} \\

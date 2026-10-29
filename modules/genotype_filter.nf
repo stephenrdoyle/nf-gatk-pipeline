@@ -17,6 +17,9 @@ process GENOTYPE_FILTER {
     tuple path("cohort.genotype_filtered.vcf.gz"), path("cohort.genotype_filtered.vcf.gz.tbi"), emit: filtered_vcf
 
     script:
+    // Heap tied to the LSF request: without -Xmx the JVM sizes its heap from
+    // the node's RAM, not task.memory, and LSF kills the job (exit 130)
+    def java_opts = "-Xmx${task.memory.toGiga() - 4}g -Dsamjdk.use_intel_deflater=false"
     // GQ filter — skipped for pooled samples (GQ not meaningful for pools)
     //           — skipped for GnarlyGenotyper output (GQ not emitted; use RGQ instead)
     def gq_filter = (!params.pooled && !params.use_gnarly && params.genotype_gq_threshold)
@@ -36,6 +39,7 @@ process GENOTYPE_FILTER {
         : ''
     """
     gatk VariantFiltration \\
+        --java-options "${java_opts}" \\
         --reference ${reference} \\
         --variant ${vcf} \\
         ${gq_filter} \\

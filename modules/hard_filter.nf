@@ -16,6 +16,9 @@ process HARD_FILTER {
     path "${variant_type}_filter_summary.tsv", emit: summary
 
     script:
+    // Heap tied to the LSF request: without -Xmx the JVM sizes its heap from
+    // the node's RAM, not task.memory, and LSF kills the job (exit 130)
+    def java_opts = "-Xmx${task.memory.toGiga() - 4}g -Dsamjdk.use_intel_deflater=false"
     // [ annotation, operator, threshold, filter name ] — single source for both
     // the VariantFiltration arguments and the threshold TSV
     def filters = variant_type == 'snps' ? [
@@ -39,6 +42,7 @@ process HARD_FILTER {
     }.join('\n')
     """
     gatk VariantFiltration \\
+        --java-options "${java_opts}" \\
         --reference ${reference} \\
         --variant ${vcf} \\
         ${filter_args} \\
