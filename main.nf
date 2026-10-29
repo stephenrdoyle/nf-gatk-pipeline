@@ -262,16 +262,29 @@ workflow {
         .collect()
     MULTIQC(multiqc_files)
 
-    // --- 17. Cleanup intermediate VCF work directories (opt-in) ---
+    // --- 17. Cleanup intermediate work directories (opt-in) ---
+    // One output per task is enough: CLEANUP empties the task directory
+    // that produced it. Validated BAMs are deliberately not included.
     if (params.cleanup) {
+        cleanup_targets = Channel.empty()
+            .mix(
+                HAPLOTYPE_CALLER.out.gvcfs.map        { sample_id, group_id, gvcf, tbi -> gvcf },
+                GENOMICS_DB_IMPORT.out.genomicsdb.map { group_id, db, interval_list -> db },
+                genotyped_vcfs.map                    { group_id, vcf, tbi -> vcf },
+                cohort_vcf.map                        { vcf, tbi -> vcf },
+                GENOTYPE_FILTER.out.filtered_vcf.map  { vcf, tbi -> vcf },
+                SPLIT_VARIANTS.out.snps.map           { vcf, tbi -> vcf },
+                SPLIT_VARIANTS.out.indels.map         { vcf, tbi -> vcf },
+                filt_snps_ch.map                      { vcf, tbi -> vcf },
+                filt_indels_ch.map                    { vcf, tbi -> vcf }
+            )
+            .collect()
+
         CLEANUP(
             MULTIQC.out.report,
-            cohort_vcf,
-            GENOTYPE_FILTER.out.filtered_vcf,
-            SPLIT_VARIANTS.out.snps,
-            SPLIT_VARIANTS.out.indels,
-            filt_snps_ch,
-            filt_indels_ch
+            cleanup_targets,
+            workflow.workDir.toString(),
+            file(params.outdir).toAbsolutePath().toString()
         )
     }
 }
