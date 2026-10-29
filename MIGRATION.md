@@ -16,7 +16,10 @@ The primary interval is still the unpadded window. The padding flag tells
 HaplotypeCaller to extend its active region search 200 bp either side of the
 interval boundary, ensuring variants at boundaries are called with full
 haplotype context. The output GVCF still only contains records within the
-padded region — GenotypeGVCFs trims back to the primary interval.
+padded region. GenomicsDBImport imports only the primary interval, and
+GenotypeGVCFs runs with `--only-output-calls-starting-in-intervals`, so each
+variant is emitted only by the group in which it starts — no duplicates at
+window boundaries after concatenation.
 
 ### Channel reshape in main.nf (step 4)
 This is the most important change. Previously one channel item per chromosome

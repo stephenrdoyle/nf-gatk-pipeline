@@ -2,11 +2,16 @@ process GENOTYPE_GVCFS {
     /*
      * Genotype a single GenomicsDB workspace.
      * Outputs one VCF per interval group — these are concatenated
-     * downstream by GATHER_VCFS into per-chromosome VCFs.
+     * downstream by GATHER_VCFS into the cohort VCF.
      *
-     * The --intervals flag restricts output to the primary (unpadded)
-     * interval, discarding any boundary-padded calls that bled in
-     * from HaplotypeCaller's --interval-padding 200.
+     * --intervals restricts genotyping to the primary (unpadded) interval.
+     * On its own that still emits any record that merely overlaps the
+     * interval, so a deletion starting just before a window boundary is
+     * written by both neighbouring groups and duplicated after GATHER_VCFS
+     * (bcftools concat does not deduplicate).
+     * --only-output-calls-starting-in-intervals keeps each record only in
+     * the group where it starts, so every site is emitted exactly once.
+     * GNARLY_GENOTYPER uses the same flag.
      */
 
     tag { group_id }
@@ -31,6 +36,7 @@ process GENOTYPE_GVCFS {
         --variant gendb://${genomicsdb} \\
         --output ${group_id}.genotyped.vcf.gz \\
         --intervals ${interval_list} \\
+        --only-output-calls-starting-in-intervals \\
         --genomicsdb-shared-posixfs-optimizations true \\
         --tmp-dir .
     """
