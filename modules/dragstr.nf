@@ -22,10 +22,11 @@ process COMPOSE_STR_TABLE {
 
     script:
     def java_opts = "-Xmx${task.memory.toGiga() - 4}g -Dsamjdk.use_intel_deflater=false"
+    def ref_abs   = reference.toRealPath()   // same reference form as every other GATK step
     """
     gatk ComposeSTRTableFile \\
         --java-options "${java_opts}" \\
-        --reference ${reference} \\
+        --reference ${ref_abs} \\
         --output ${reference.baseName}.str.zip
     """
 }
@@ -46,10 +47,11 @@ process CALIBRATE_DRAGSTR {
 
     script:
     def java_opts = "-Xmx${task.memory.toGiga() - 4}g -Dsamjdk.use_intel_deflater=false"
+    def ref_abs   = reference.toRealPath()   // same reference form as every other GATK step
     """
     gatk CalibrateDragstrModel \\
         --java-options "${java_opts}" \\
-        --reference ${reference} \\
+        --reference ${ref_abs} \\
         --input ${bam} \\
         --str-table-path ${str_table} \\
         --output ${sample_id}.dragstr
