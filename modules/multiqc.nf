@@ -16,8 +16,9 @@ process MULTIQC {
         ? "--config ${projectDir}/assets/multiqc_config.yml"
         : ''
     """
-    # Unset PYTHONPATH to prevent bcftools-1.19/python-3.11.6 numpy
-    # from conflicting with MultiQC's Python 3.12 numpy
+    # multiqc comes from its own module (see MULTIQC in nextflow.config).
+    # Unset PYTHONPATH in case a python module's numpy is still inherited
+    # from the submitting environment and clashes with MultiQC's
     unset PYTHONPATH
 
     multiqc . \\

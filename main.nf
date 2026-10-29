@@ -36,36 +36,11 @@ include { FILTER_SUMMARY      } from './modules/filter_summary'
 include { MULTIQC             } from './modules/multiqc'
 include { CLEANUP             } from './modules/cleanup'
 include { POOL_ANNOTATE       } from './modules/pool_annotate'
+include { SOFTWARE_VERSIONS   } from './modules/software_versions'
 
 // ---------------------------------------------------------------------------
-// Parameter defaults
+// Parameter defaults: defined once, in the params block of nextflow.config
 // ---------------------------------------------------------------------------
-params.samplesheet              = null
-params.reference                = null
-params.outdir                   = 'results'
-params.window_size              = 10_000_000
-params.cleanup                  = false
-
-// Genotyping mode
-params.use_gnarly               = false
-params.dragen_mode              = false
-params.pooled                   = false
-
-// Genotype-level filters
-params.genotype_dp_threshold    = 5
-params.genotype_gq_threshold    = 20
-params.genotype_rgq_threshold   = null
-
-// Variant filter mode: 'hard', 'optimised', or 'custom'
-params.filter_mode              = 'hard'
-params.filter_percentile_lo     = 5      // for optimised mode
-params.snp_filters              = null   // for custom mode
-params.indel_filters            = null   // for custom mode
-
-// Pool annotation (pooled mode only)
-params.pool_het_lo              = 0.05
-params.pool_het_hi              = 0.95
-params.pool_hom_alt_lo          = 0.95
 
 // Guard: required inputs
 if (!params.samplesheet || !params.reference) {
@@ -104,6 +79,23 @@ def parse_samplesheet(csv_path) {
 // Workflow
 // ---------------------------------------------------------------------------
 workflow {
+
+    // --- Software versions (results/pipeline_info/software_versions.txt) ---
+    // Pipeline commit is read on the launch host; '-dirty' marks uncommitted
+    // changes, i.e. a run whose code isn't exactly any commit
+    def git_commit = 'unknown (not a git checkout)'
+    try {
+        def sha   = "git -C ${projectDir} rev-parse --short HEAD".execute().text.trim()
+        def dirty = "git -C ${projectDir} status --porcelain --untracked-files=no".execute().text.trim()
+        if (sha) git_commit = sha + (dirty ? '-dirty' : '')
+    } catch (Exception e) { }
+    SOFTWARE_VERSIONS([
+        "pipeline: ${workflow.manifest.name} ${workflow.manifest.version}",
+        "git commit: ${git_commit}",
+        "nextflow: ${workflow.nextflow.version}",
+        "run name: ${workflow.runName}",
+        "command: ${workflow.commandLine}",
+    ].join('\n'))
 
     // --- 0. Reference files ---
     reference = file(params.reference, checkIfExists: true)
@@ -256,8 +248,12 @@ workflow {
     }
 
     // --- 14. Stats on filtered VCF + per-sample missingness ---
-    BCFTOOLS_STATS_FILTERED(final_vcf, 'after_filter')
-    SAMPLE_MISSINGNESS(final_vcf, 'after_filter')
+    // Run on merged_vcf, before pool annotation: in pooled mode every GT is
+    // then masked, which would report every sample as 100% missing. Here,
+    // missing still means "failed the genotype DP filter". Without --pooled
+    // merged_vcf is the final VCF.
+    BCFTOOLS_STATS_FILTERED(merged_vcf, 'after_filter')
+    SAMPLE_MISSINGNESS(merged_vcf, 'after_filter')
 
     // --- 15. Filter summary report ---
     FILTER_SUMMARY(
@@ -277,16 +273,29 @@ workflow {
         .collect()
     MULTIQC(multiqc_files)
 
-    // --- 17. Cleanup intermediate VCF work directories (opt-in) ---
+    // --- 17. Cleanup intermediate work directories (opt-in) ---
+    // One output per task is enough: CLEANUP empties the task directory
+    // that produced it. Validated BAMs are deliberately not included.
     if (params.cleanup) {
+        cleanup_targets = Channel.empty()
+            .mix(
+                HAPLOTYPE_CALLER.out.gvcfs.map        { sample_id, group_id, gvcf, tbi -> gvcf },
+                GENOMICS_DB_IMPORT.out.genomicsdb.map { group_id, db, interval_list -> db },
+                genotyped_vcfs.map                    { group_id, vcf, tbi -> vcf },
+                cohort_vcf.map                        { vcf, tbi -> vcf },
+                GENOTYPE_FILTER.out.filtered_vcf.map  { vcf, tbi -> vcf },
+                SPLIT_VARIANTS.out.snps.map           { vcf, tbi -> vcf },
+                SPLIT_VARIANTS.out.indels.map         { vcf, tbi -> vcf },
+                filt_snps_ch.map                      { vcf, tbi -> vcf },
+                filt_indels_ch.map                    { vcf, tbi -> vcf }
+            )
+            .collect()
+
         CLEANUP(
             MULTIQC.out.report,
-            cohort_vcf,
-            GENOTYPE_FILTER.out.filtered_vcf,
-            SPLIT_VARIANTS.out.snps,
-            SPLIT_VARIANTS.out.indels,
-            filt_snps_ch,
-            filt_indels_ch
+            cleanup_targets,
+            workflow.workDir.toString(),
+            file(params.outdir).toAbsolutePath().toString()
         )
     }
 }

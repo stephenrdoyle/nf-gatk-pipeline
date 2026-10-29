@@ -2,9 +2,6 @@ process HARD_FILTER {
     tag "${variant_type}"
     label 'process_low'
 
-    conda 'bioconda::gatk4=4.6.1.0'
-    container 'broadinstitute/gatk:4.6.1.0'
-
     input:
     tuple val(variant_type), path(vcf), path(tbi)
     path reference

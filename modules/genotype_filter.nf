@@ -4,9 +4,6 @@ process GENOTYPE_FILTER {
 
     publishDir "${params.outdir}", mode: 'copy', pattern: "cohort.genotype_filtered.vcf.gz*"
 
-    conda 'bioconda::gatk4=4.6.1.0'
-    container 'broadinstitute/gatk:4.6.1.0'
-
     input:
     tuple path(vcf), path(tbi)
     path reference
