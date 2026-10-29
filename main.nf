@@ -309,7 +309,7 @@ workflow {
     if (params.cleanup) {
         cleanup_targets = Channel.empty()
             .mix(
-                HAPLOTYPE_CALLER.out.gvcfs.map        { sample_id, group_id, gvcf, tbi -> gvcf },
+                hc_gvcfs.map                          { sample_id, group_id, gvcf, tbi -> gvcf },
                 GENOMICS_DB_IMPORT.out.genomicsdb.map { group_id, db, interval_list -> db },
                 genotyped_vcfs.map                    { group_id, vcf, tbi -> vcf },
                 cohort_vcf.map                        { vcf, tbi -> vcf },
