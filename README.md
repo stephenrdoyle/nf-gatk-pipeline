@@ -2,7 +2,7 @@
 
 A Nextflow (DSL2) pipeline for cohort germline variant calling with GATK: aligned BAMs in, one filtered multi-sample VCF out. It was built for *Haemonchus contortus* whole-genome data on the Sanger farm22 LSF cluster, but nothing in the workflow is species-specific.
 
-The genome is split into fixed-size windows (10 Mb by default). HaplotypeCaller runs per sample per window, and joint genotyping runs per window. A failure then costs one window rather than a whole chromosome, and `-resume` reruns only what failed.
+The genome is split into fixed-size windows (10 Mb by default). HaplotypeCaller runs per sample per window, and joint genotyping runs on smaller pieces of each window (2 Mb by default). A failure then costs one window rather than a whole chromosome, and `-resume` reruns only what failed.
 
 ## Workflow
 
@@ -25,9 +25,9 @@ Each step in more detail:
 1. **`VALIDATE_BAM`** makes sure every BAM has usable read groups: one sample name, plus `PL`/`LB`/`PU`. BAMs that are already fine are linked, not copied.
 2. **`MAKE_INTERVALS`** splits the reference into windows of `--window_size`. Windows never cross a contig boundary, and contigs shorter than the window (e.g. the mitochondrion) get one window each.
 3. **`HAPLOTYPE_CALLER`** writes one GVCF per sample per window. It uses 200 bp of padding so variants at window edges are assembled with full context.
-4. **`GENOMICS_DB_IMPORT`** builds one GenomicsDB workspace per window, holding all samples. Each window starts as soon as all its samples have finished HaplotypeCaller.
-5. **`GENOTYPE_GVCFS`** joint-genotypes each window. Each variant is emitted only by the window it starts in, so there are no duplicates at window edges.
-6. **`GATHER_VCFS`** concatenates the windows, in reference order, into `cohort.genotyped.vcf.gz`.
+4. **`GENOMICS_DB_IMPORT`** builds a GenomicsDB workspace holding all samples for each joint-genotyping *piece*, a `--genotype_window_size` slice of a window (2 Mb by default). A window's pieces start as soon as all its samples have finished HaplotypeCaller, and fragments are consolidated at the end of the import (`--genomicsdb_consolidate`).
+5. **`GENOTYPE_GVCFS`** joint-genotypes each piece. Each variant is emitted only by the piece it starts in, so there are no duplicates at piece edges.
+6. **`GATHER_VCFS`** concatenates the pieces, in reference order, into `cohort.genotyped.vcf.gz`.
 7. **`GENOTYPE_FILTER`** sets individual genotypes with low DP or GQ to no-call (`./.`).
 8. **`SPLIT_VARIANTS`** separates SNPs from indels. Mixed sites (SNP and indel alleles at one position) go with the indels.
 9. **The SNP and indel filters** flag failing sites in the `FILTER` column; nothing is removed. **`MERGE_FILTERED`** recombines them into `cohort.filtered.vcf.gz`.
@@ -101,7 +101,9 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 | `--samplesheet` | *(required)* | Samplesheet CSV |
 | `--reference` | *(required)* | Reference FASTA |
 | `--outdir` | `results` | Output directory |
-| `--window_size` | `10000000` | Window size in bp for the interval scatter. Larger than the longest contig = one window per contig |
+| `--window_size` | `10000000` | HaplotypeCaller window size in bp. Larger than the longest contig = one window per contig |
+| `--genotype_window_size` | `2000000` | GenomicsDBImport/GenotypeGVCFs piece size in bp, within each window. ≥ `--window_size` = one piece per window. Can be changed without rerunning HaplotypeCaller |
+| `--genomicsdb_consolidate` | `true` | Merge GenomicsDB's per-batch fragments after import, so GenotypeGVCFs reads one |
 | `--filter_mode` | `hard` | `hard`, `optimised` or `custom` (see [Variant filtering](#variant-filtering)) |
 | `--filter_percentile_lo` | `5` | Optimised mode: percentile cut-off |
 | `--snp_filters` / `--indel_filters` | — | Custom mode: comma-separated GATK expressions, e.g. `"QD < 2.0,FS > 60.0"` |
