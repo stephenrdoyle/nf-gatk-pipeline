@@ -16,6 +16,10 @@ process SPLIT_VARIANTS {
     tuple path("indels.vcf.gz"), path("indels.vcf.gz.tbi"), emit: indels
 
     script:
+    // MIXED records (a site with both SNP and indel alternate alleles) go
+    // with the indels, as in GATK's hard-filtering guidance: they are kept
+    // intact as multiallelic records and filtered with the indel thresholds.
+    // Selecting only SNP and INDEL dropped them from the final VCF entirely.
     """
     gatk SelectVariants \\
         --reference ${reference} \\
@@ -27,6 +31,7 @@ process SPLIT_VARIANTS {
         --reference ${reference} \\
         --variant ${vcf} \\
         --select-type-to-include INDEL \\
+        --select-type-to-include MIXED \\
         --output indels.vcf.gz
     """
 }
