@@ -20,8 +20,12 @@ process HARD_FILTER {
     // the node's RAM, not task.memory, and LSF kills the job (exit 130)
     def java_opts = "-Xmx${task.memory.toGiga() - 4}g -Dsamjdk.use_intel_deflater=false"
     // [ annotation, operator, threshold, filter name ] — single source for both
-    // the VariantFiltration arguments and the threshold TSV
-    def filters = variant_type == 'snps' ? [
+    // the VariantFiltration arguments and the threshold TSV.
+    // --dragen_mode: DRAGEN-GATK's single QUAL hard filter replaces the GATK
+    // annotation filters, for SNPs and indels alike
+    def filters = params.dragen_mode ? [
+        [ 'QUAL',           '<', '10.4139', 'DRAGENHardQUAL'       ],
+    ] : variant_type == 'snps' ? [
         [ 'QD',             '<', '2.0',   'SNP_QD2'                ],
         [ 'MQ',             '<', '40.0',  'SNP_MQ40'               ],
         [ 'FS',             '>', '60.0',  'SNP_FS60'               ],
