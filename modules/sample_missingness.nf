@@ -1,4 +1,16 @@
 process SAMPLE_MISSINGNESS {
+    /*
+     * Per-sample genotype missingness for one stage of the cohort VCF.
+     *
+     * Run twice (see main.nf):
+     *   before_filter  cohort.genotyped.vcf.gz, all sites: genotypes as
+     *                  GATK called them
+     *   after_filter   cohort.filtered.vcf.gz, PASS sites only: the data you
+     *                  keep, after per-genotype DP/GQ no-calls; low-DP counts
+     *                  come from the genotype filter's FORMAT/FT
+     * pass_only restricts both the counts and the low-DP tally to PASS sites,
+     * so failed sites (which are discarded anyway) don't inflate missingness.
+     */
     tag "${label}"
     label 'process_low'
 
@@ -6,70 +18,62 @@ process SAMPLE_MISSINGNESS {
 
     input:
     tuple path(vcf), path(tbi)
-    val  label
+    val  label       // "before_filter" or "after_filter"
+    val  pass_only   // true: only sites whose FILTER is PASS (or '.')
 
     output:
     path "${label}_missingness.tsv", emit: missingness
 
     script:
+    def filter_arg = pass_only ? "--apply-filters 'PASS,.'" : ''
     """
-    # ── 1. per-sample missingness from bcftools stats (single fast pass) ──────
-    bcftools stats -s - ${vcf} > bcftools_stats.txt
+    # Nextflow runs bash -ue only: without pipefail a bcftools failure in the
+    # pipe below would leave empty low-DP counts and a task that "succeeded"
+    set -o pipefail
 
-    # ── 2. LowDP counts per sample per type — single streaming pass ───────────
-    # Decompress once, pipe through two awk processes simultaneously using
-    # process substitution to avoid reading the file twice.
-    # awk extracts: SAMPLE, FORMAT tags, FILTER, TYPE
-    # We only need sites where at least one FORMAT field contains LowDP
-    bcftools view -H ${vcf} | \\
+    # ── 1. per-sample called / missing genotypes ──────────────────────────────
+    bcftools stats ${filter_arg} --samples - ${vcf} > bcftools_stats.txt
+
+    # ── 2. LowDP genotypes per sample, split SNP / indel ──────────────────────
+    # A site is a SNP when REF and every ALT allele are single bases
+    # (multiallelic SNPs included); anything else counts as an indel.
+    bcftools view ${filter_arg} --no-header ${vcf} | \\
         awk '
         BEGIN { OFS="\\t" }
         {
-            # Field 4 = REF, 5 = ALT — determine type
-            ref = \$4; alt = \$5
-            type = (length(ref) == length(alt) && length(ref) == 1) ? "SNP" : "INDEL"
+            n_alt = split(\$5, alts, ",")
+            type = (length(\$4) == 1) ? "SNP" : "INDEL"
+            for (a = 1; a <= n_alt; a++)
+                if (length(alts[a]) != 1 || alts[a] == "*") type = "INDEL"
 
-            # FORMAT field is column 9
-            fmt = \$9
-            n = split(fmt, fmt_keys, ":")
-
-            # Find FT index in FORMAT
+            n = split(\$9, fmt_keys, ":")
             ft_idx = 0
-            for (i = 1; i <= n; i++) {
-                if (fmt_keys[i] == "FT") { ft_idx = i; break }
-            }
-            if (ft_idx == 0) next  # no FT field, skip
+            for (i = 1; i <= n; i++) if (fmt_keys[i] == "FT") { ft_idx = i; break }
+            if (ft_idx == 0) next   # no genotype filter on this record
 
-            # Iterate sample columns (10+)
             for (s = 10; s <= NF; s++) {
-                split(\$s, vals, ":")
-                ft = (ft_idx <= length(vals)) ? vals[ft_idx] : "."
-                if (ft ~ /LowDP/) {
-                    print s-9, type  # sample index (1-based), type
-                }
+                n_vals = split(\$s, vals, ":")
+                if (ft_idx <= n_vals && vals[ft_idx] ~ /LowDP/) print s - 9, type
             }
         }
         ' > lowdp_hits.txt
 
-    # ── 3. get sample names in order ──────────────────────────────────────────
-    bcftools query -l ${vcf} > sample_names.txt
+    # ── 3. sample names in VCF order ──────────────────────────────────────────
+    bcftools query --list-samples ${vcf} > sample_names.txt
 
-    # ── 4. combine into final TSV ──────────────────────────────────────────────
+    # ── 4. combine into the per-sample TSV ────────────────────────────────────
     python3 << 'PYEOF'
-from collections import defaultdict
-
 label       = "${label}"
 out_file    = f"{label}_missingness.tsv"
-total_sites = 0
+total_sites = None
 samples     = {}
 
-# Read sample names (ordered)
 with open('sample_names.txt') as f:
     sample_names = [l.strip() for l in f if l.strip()]
 
-# Parse bcftools stats. PSC columns are located by name from the '# PSC'
-# header line rather than by position, because the layout varies between
-# bcftools versions (in 1.19 nMissing is column [14], not [11]=nSingletons)
+# PSC columns are located by name from the '# PSC' header line rather than
+# by position, because the layout varies between bcftools versions
+# (in 1.19 nMissing is column [14], not [11] = nSingletons)
 psc_cols = None
 with open('bcftools_stats.txt') as f:
     for line in f:
@@ -77,64 +81,42 @@ with open('bcftools_stats.txt') as f:
         if line.startswith('SN') and 'number of records' in line:
             total_sites = int(parts[-1])
         elif line.startswith('# PSC'):
-            # '[4]nRefHom' -> 'nRefHom'
-            psc_cols = {h.split(']', 1)[-1]: i for i, h in enumerate(parts)}
+            psc_cols = {h.split(']', 1)[-1]: i for i, h in enumerate(parts)}   # '[4]nRefHom' -> 'nRefHom'
         elif line.startswith('PSC'):
             if psc_cols is None or 'nMissing' not in psc_cols:
                 raise SystemExit('ERROR: bcftools stats PSC section has no nMissing column')
-            sample      = parts[psc_cols['sample']]
-            missing     = int(parts[psc_cols['nMissing']])
-            hom_rr      = int(parts[psc_cols['nRefHom']])
-            hom_aa      = int(parts[psc_cols['nNonRefHom']])
-            het         = int(parts[psc_cols['nHets']])
-            called      = hom_rr + hom_aa + het
-            pct_missing = round(100 * missing / total_sites, 4) if total_sites else 0
-            pct_called  = round(100 * called  / total_sites, 4) if total_sites else 0
-            samples[sample] = {
-                'total_sites':   total_sites,
-                'n_called':      called,
-                'n_missing':     missing,
-                'pct_called':    pct_called,
-                'pct_missing':   pct_missing,
-                'n_lowdp_snp':   0,
-                'n_lowdp_indel': 0,
+            called  = sum(int(parts[psc_cols[k]]) for k in ('nRefHom', 'nNonRefHom', 'nHets'))
+            missing = int(parts[psc_cols['nMissing']])
+            samples[parts[psc_cols['sample']]] = {
+                'n_called': called, 'n_missing': missing,
+                'n_lowdp_snp': 0, 'n_lowdp_indel': 0,
             }
 
-# Count LowDP hits from awk output (sample_index is 1-based)
+# Fail rather than write an empty or wrong table
+if total_sites is None:
+    raise SystemExit('ERROR: no "number of records" line in bcftools stats output')
+if set(samples) != set(sample_names):
+    raise SystemExit(f'ERROR: bcftools stats has {len(samples)} samples, the VCF has {len(sample_names)}')
+
 with open('lowdp_hits.txt') as f:
     for line in f:
-        parts = line.strip().split('\\t')
-        if len(parts) < 2:
-            continue
-        try:
-            sidx  = int(parts[0]) - 1
-            vtype = parts[1]
-        except ValueError:
-            continue
-        if sidx < 0 or sidx >= len(sample_names):
-            continue
-        sample = sample_names[sidx]
-        if sample not in samples:
-            continue
-        if vtype == 'SNP':
-            samples[sample]['n_lowdp_snp']   += 1
-        else:
-            samples[sample]['n_lowdp_indel'] += 1
+        idx, vtype = line.rstrip('\\n').split('\\t')
+        key = 'n_lowdp_snp' if vtype == 'SNP' else 'n_lowdp_indel'
+        samples[sample_names[int(idx) - 1]][key] += 1
 
+pct = lambda n: round(100 * n / total_sites, 4) if total_sites else 0
 with open(out_file, 'w') as f:
-    header = ('sample\\ttotal_sites\\tn_called\\tn_missing\\tpct_called\\t'
-              'pct_missing\\tn_lowdp_snp\\tn_lowdp_indel\\tlabel\\n')
-    f.write(header)
-    for sample, d in samples.items():
+    f.write('\\t'.join(['sample', 'total_sites', 'n_called', 'n_missing', 'pct_called',
+                       'pct_missing', 'n_lowdp_snp', 'n_lowdp_indel', 'label']) + '\\n')
+    for sample in sample_names:
+        d = samples[sample]
         f.write('\\t'.join(str(x) for x in [
-            sample,
-            d['total_sites'], d['n_called'],    d['n_missing'],
-            d['pct_called'],  d['pct_missing'],
-            d['n_lowdp_snp'], d['n_lowdp_indel'],
-            label
+            sample, total_sites, d['n_called'], d['n_missing'],
+            pct(d['n_called']), pct(d['n_missing']),
+            d['n_lowdp_snp'], d['n_lowdp_indel'], label,
         ]) + '\\n')
 
-print(f"Missingness report written: {out_file} ({len(samples)} samples)")
+print(f'Missingness written: {out_file} ({len(sample_names)} samples, {total_sites} sites)')
 PYEOF
     """
 }

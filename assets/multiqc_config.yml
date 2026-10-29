@@ -2,45 +2,54 @@ title: "GATK Variant Calling Pipeline"
 subtitle: "Variant calling and filtering report"
 intro_text: "Summary of variant calling, filtering, and genotype quality across samples"
 
+# Custom tables are keyed on their first column, so every table here has a
+# unique first column: a repeated value would silently overwrite rows.
+
 custom_data:
     filter_summary:
         id: "filter_summary"
         section_name: "Variant Filter Summary"
-        description: "Variant counts before and after filtering, per filter parameter"
+        description: >-
+            Sites per site filter, from the filtered VCFs' FILTER column.
+            Filters only flag sites, so "all sites" is the same before and after;
+            PASS is what is kept. "Only this filter" counts sites that fail this
+            filter and no other. Filters that flagged no sites are not listed.
         file_format: "tsv"
         plot_type: "table"
+        pconfig:
+            id: "filter_summary_table"
+            col1_header: "Type: filter"
         headers:
             variant_type:
                 title: "Type"
-            annotation:
-                title: "Annotation"
-            operator:
-                title: "Op"
-            threshold:
-                title: "Threshold"
-            n_total_before:
-                title: "Total (before)"
+            filter:
+                title: "Filter"
+            expression:
+                title: "Expression"
+            n_sites:
+                title: "Sites"
                 format: "{:,.0f}"
-            n_pass_after:
-                title: "PASS (after)"
-                format: "{:,.0f}"
-            n_flagged:
-                title: "Flagged"
-                format: "{:,.0f}"
-            pct_flagged_overall:
-                title: "% Flagged"
+            pct_sites:
+                title: "% of type"
                 suffix: "%"
-    missingness:
-        id: "missingness"
-        section_name: "Per-Sample Missingness"
-        description: "Genotype missingness per sample before and after genotype filtering"
+                max: 100
+            n_only:
+                title: "Only this filter"
+                format: "{:,.0f}"
+    missingness_before:
+        id: "missingness_before"
+        section_name: "Per-Sample Missingness: before filtering"
+        description: >-
+            Raw joint-genotyped cohort VCF, all sites: genotypes as GATK called
+            them, before per-genotype DP/GQ filtering and site filtering.
         file_format: "tsv"
         plot_type: "table"
-        headers:
-            sample:
-                title: "Sample"
+        headers: &missingness_headers
             total_sites:
-                title: "Total sites"
+                title: "Sites"
+                format: "{:,.0f}"
+            n_called:
+                title: "Called"
                 format: "{:,.0f}"
             n_missing:
                 title: "Missing"
@@ -48,13 +57,30 @@ custom_data:
             pct_missing:
                 title: "% Missing"
                 suffix: "%"
-            label:
-                title: "Stage"
+                max: 100
+            n_lowdp_snp:
+                title: "Low-DP SNP GTs"
+                format: "{:,.0f}"
+            n_lowdp_indel:
+                title: "Low-DP indel GTs"
+                format: "{:,.0f}"
+    missingness_after:
+        id: "missingness_after"
+        section_name: "Per-Sample Missingness: after filtering"
+        description: >-
+            Filtered cohort VCF, PASS sites only: the genotypes you keep. Missing
+            includes genotypes set to no-call by the DP/GQ genotype filters;
+            Low-DP columns count those failing the DP filter.
+        file_format: "tsv"
+        plot_type: "table"
+        headers: *missingness_headers
 
 sp:
     filter_summary:
         fn: "filter_summary.tsv"
-    missingness:
-        fn: "*_missingness.tsv"
+    missingness_before:
+        fn: "before_filter_missingness.tsv"
+    missingness_after:
+        fn: "after_filter_missingness.tsv"
     bcftools/stats:
         fn: "*_bcftools_stats.txt"
