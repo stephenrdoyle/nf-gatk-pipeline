@@ -38,29 +38,8 @@ include { CLEANUP             } from './modules/cleanup'
 include { POOL_ANNOTATE       } from './modules/pool_annotate'
 
 // ---------------------------------------------------------------------------
-// Parameter defaults
+// Parameter defaults: defined once, in the params block of nextflow.config
 // ---------------------------------------------------------------------------
-params.samplesheet              = null
-params.reference                = null
-params.outdir                   = 'results'
-params.window_size              = 10_000_000
-params.cleanup                  = false
-
-// Genotyping mode
-params.use_gnarly               = false
-params.dragen_mode              = false
-params.pooled                   = false
-
-// Genotype-level filters
-params.genotype_dp_threshold    = 5
-params.genotype_gq_threshold    = 20
-params.genotype_rgq_threshold   = null
-
-// Variant filter mode: 'hard', 'optimised', or 'custom'
-params.filter_mode              = 'hard'
-params.filter_percentile_lo     = 5      // for optimised mode
-params.snp_filters              = null   // for custom mode
-params.indel_filters            = null   // for custom mode
 
 // Guard: --use_gnarly and --dragen_mode are incompatible
 if (params.use_gnarly && params.dragen_mode) {
