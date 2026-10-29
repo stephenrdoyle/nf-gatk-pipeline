@@ -2,9 +2,6 @@ process SPLIT_VARIANTS {
     tag "split"
     label 'process_low'
 
-    conda 'bioconda::gatk4=4.6.1.0'
-    container 'broadinstitute/gatk:4.6.1.0'
-
     input:
     tuple path(vcf), path(tbi)
     path reference

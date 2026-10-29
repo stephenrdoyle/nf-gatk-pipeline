@@ -4,9 +4,6 @@ process BCFTOOLS_STATS {
 
     publishDir "${params.outdir}/bcftools_stats", mode: 'copy'
 
-    conda 'bioconda::bcftools=1.19'
-    container 'biocontainers/bcftools:1.19--h8b25389_0'
-
     input:
     tuple path(vcf), path(tbi)
     val   label   // e.g. "before_filter", "after_filter", "after_genotype_filter"

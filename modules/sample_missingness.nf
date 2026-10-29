@@ -4,9 +4,6 @@ process SAMPLE_MISSINGNESS {
 
     publishDir "${params.outdir}/missingness", mode: 'copy'
 
-    conda 'bioconda::bcftools=1.19'
-    container 'biocontainers/bcftools:1.19--h8b25389_0'
-
     input:
     tuple path(vcf), path(tbi)
     val  label

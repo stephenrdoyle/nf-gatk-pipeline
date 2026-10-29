@@ -4,9 +4,6 @@ process OPTIMISED_FILTER {
 
     publishDir "${params.outdir}/filter_reports", mode: 'copy', pattern: "*.html"
 
-    conda 'bioconda::gatk4=4.6.1.0 conda-forge::python=3.11'
-    container 'broadinstitute/gatk:4.6.1.0'
-
     input:
     tuple val(variant_type), path(vcf), path(tbi)
     path reference
