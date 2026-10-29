@@ -17,6 +17,12 @@ process GENOTYPE_FILTER {
     tuple path("cohort.genotype_filtered.vcf.gz"), path("cohort.genotype_filtered.vcf.gz.tbi"), emit: filtered_vcf
 
     script:
+    // Same reference form as HAPLOTYPE_CALLER / GENOTYPE_GVCFS: the real path,
+    // with symlinks (e.g. lustre_link) resolved. GATK runs in a Singularity
+    // wrapper, so a resolved /lustre path doesn't depend on the container
+    // also seeing a staged symlink's target; .fai/.dict are published next
+    // to the real FASTA by SAMTOOLS_FAIDX / CREATE_DICT
+    def ref_abs = reference.toRealPath()
     // Heap tied to the LSF request: without -Xmx the JVM sizes its heap from
     // the node's RAM, not task.memory, and LSF kills the job (exit 130)
     def java_opts = "-Xmx${task.memory.toGiga() - 4}g -Dsamjdk.use_intel_deflater=false"
@@ -40,7 +46,7 @@ process GENOTYPE_FILTER {
     """
     gatk VariantFiltration \\
         --java-options "${java_opts}" \\
-        --reference ${reference} \\
+        --reference ${ref_abs} \\
         --variant ${vcf} \\
         ${gq_filter} \\
         ${rgq_filter} \\
