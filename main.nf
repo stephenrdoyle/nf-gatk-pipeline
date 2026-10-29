@@ -62,11 +62,6 @@ params.filter_percentile_lo     = 5      // for optimised mode
 params.snp_filters              = null   // for custom mode
 params.indel_filters            = null   // for custom mode
 
-// Pool annotation (pooled mode only)
-params.pool_het_lo              = 0.05
-params.pool_het_hi              = 0.95
-params.pool_hom_alt_lo          = 0.95
-
 // Guard: --use_gnarly and --dragen_mode are incompatible
 if (params.use_gnarly && params.dragen_mode) {
     error "ERROR: --use_gnarly and --dragen_mode cannot be used together"
@@ -241,8 +236,12 @@ workflow {
     }
 
     // --- 14. Stats on filtered VCF + per-sample missingness ---
-    BCFTOOLS_STATS_FILTERED(final_vcf, 'after_filter')
-    SAMPLE_MISSINGNESS(final_vcf, 'after_filter')
+    // Run on merged_vcf, before pool annotation: in pooled mode every GT is
+    // then masked, which would report every sample as 100% missing. Here,
+    // missing still means "failed the genotype DP filter". Without --pooled
+    // merged_vcf is the final VCF.
+    BCFTOOLS_STATS_FILTERED(merged_vcf, 'after_filter')
+    SAMPLE_MISSINGNESS(merged_vcf, 'after_filter')
 
     // --- 15. Filter summary report ---
     FILTER_SUMMARY(

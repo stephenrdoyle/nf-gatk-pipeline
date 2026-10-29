@@ -1,154 +1,118 @@
 #!/usr/bin/env python3
 """
-Post-process a VCF for pooled samples:
-  1. Add AF = AD[1] / (AD[0] + AD[1]) to FORMAT per genotype
-  2. Add ##SAMPLE pooled flag to header
-  3. Mask GT to ./. where allele balance is inconsistent with
-     a diploid call (not near 0%, 50%, or 100%)
+Post-process a cohort VCF of pooled samples.
+
+HaplotypeCaller and GenotypeGVCFs call every sample as a diploid
+individual. A pool is a mix of many individuals whose allele frequency can
+take any value, so those diploid genotypes are not meaningful. This script:
+  1. sets every GT to missing (./.), so no downstream tool treats the
+     diploid calls as real genotypes
+  2. adds FORMAT/AF: the frequency of each ALT allele in the pool from AD,
+     AD[alt] / sum(AD), one value per ALT allele; '.' when FORMAT/DP is
+     below min_dp or AD is missing
+  3. records in the header that the samples are pools
+All other FORMAT fields (AD, DP, ...) are left unchanged.
 
 Usage:
-    pool_annotate.py <input.vcf.gz> <output.vcf.gz> <sample_id> \
-                     [het_lo] [het_hi] [hom_alt_lo] [min_dp]
+    pool_annotate.py <input.vcf[.gz]> <output.vcf | -> [min_dp]
 
-    het_lo     lower bound for het allele balance  [default: 0.35]
-    het_hi     upper bound for het allele balance  [default: 0.65]
-    hom_alt_lo lower bound for hom-alt allele balance [default: 0.90]
-    
-    Genotypes with allele balance outside:
-        0.0 - (1 - hom_alt_lo)  → hom-ref zone
-        het_lo - het_hi          → het zone
-        hom_alt_lo - 1.0         → hom-alt zone
-    are masked to ./.
+Output is uncompressed VCF ('-' for stdout); the caller BGZF-compresses it.
+Progress messages go to stderr.
 """
-import sys, gzip, re
+import sys, gzip
 
-in_vcf      = sys.argv[1]
-out_vcf     = sys.argv[2]
-sample_id   = sys.argv[3]
-het_lo      = float(sys.argv[4]) if len(sys.argv) > 4 else 0.35
-het_hi      = float(sys.argv[5]) if len(sys.argv) > 5 else 0.65
-hom_alt_lo  = float(sys.argv[6]) if len(sys.argv) > 6 else 0.90
-min_dp      = int(sys.argv[7])   if len(sys.argv) > 7 else 0
-hom_ref_hi  = 1.0 - hom_alt_lo  # upper bound for hom-ref zone
+in_vcf  = sys.argv[1]
+out_vcf = sys.argv[2]
+min_dp  = int(sys.argv[3]) if len(sys.argv) > 3 else 0
 
-def calc_af(ad_field):
-    """Calculate allele frequency from AD field. Returns None if missing."""
+def allele_freqs(ad_field, n_alt):
+    """Per-ALT allele frequencies from AD, or None if AD is unusable."""
     try:
-        parts = ad_field.split(',')
-        if len(parts) < 2:
-            return None
-        ref_count = int(parts[0])
-        alt_count = int(parts[1])
-        total = ref_count + alt_count
-        return alt_count / total if total > 0 else None
-    except (ValueError, ZeroDivisionError):
+        counts = [int(x) for x in ad_field.split(',')]
+    except ValueError:
         return None
+    total = sum(counts)
+    if len(counts) != n_alt + 1 or total == 0:
+        return None
+    return [c / total for c in counts[1:]]
 
-def mask_gt(gt, af):
-    """
-    Return masked GT ./. if AF is inconsistent with the called diploid genotype.
-    Phased genotypes (|) are also masked.
-    """
-    if af is None:
-        return gt
-    # Normalise phased to unphased for comparison
-    gt_norm = gt.replace('|', '/')
-    if gt_norm in ('./.', '.'):
-        return gt
-    # Check if AF falls in an expected diploid zone
-    in_hom_ref  = af <= hom_ref_hi
-    in_het      = het_lo <= af <= het_hi
-    in_hom_alt  = af >= hom_alt_lo
-    if in_hom_ref or in_het or in_hom_alt:
-        return gt   # consistent with diploid — keep
-    # AF is in an ambiguous zone — mask
-    return './.'
+def depth_ok(dp_field):
+    if min_dp <= 0:
+        return True
+    try:
+        return int(dp_field) >= min_dp
+    except ValueError:
+        return False
 
-n_total  = 0
-n_masked = 0
-n_af_added = 0
+def missing_gt(gt):
+    """Missing genotype with the same ploidy: 0/1 -> ./., 1 -> ."""
+    return '/'.join('.' for _ in gt.replace('|', '/').split('/'))
 
-opener  = gzip.open if in_vcf.endswith('.gz') else open
-wopener = open  # always write uncompressed — caller handles BGZF compression
+opener = gzip.open if in_vcf.endswith('.gz') else open
+n_sites = n_masked = n_af = 0
+has_af_header = False
 
-header_sample_added = False
-
-with opener(in_vcf, 'rt') as fin, wopener(out_vcf, 'wt') as fout:
+with opener(in_vcf, 'rt') as fin, (sys.stdout if out_vcf == '-' else open(out_vcf, 'w')) as fout:
     for line in fin:
-        # ── header lines ──────────────────────────────────────────────────────
-        if line.startswith('#'):
-            if line.startswith('##FORMAT=<ID=GT') and not header_sample_added:
-                # Insert AF FORMAT definition and SAMPLE tag before first FORMAT line
-                fout.write('##FORMAT=<ID=AF,Number=A,Type=Float,Description="Allele frequency calculated from AD (alt / total)">\n')
-                fout.write(f'##SAMPLE=<ID={sample_id},Pooled=true,HetLo={het_lo},HetHi={het_hi},HomAltLo={hom_alt_lo}>\n')
-                header_sample_added = True
+        # ── header ────────────────────────────────────────────────────────────
+        if line.startswith('##'):
+            if line.startswith('##FORMAT=<ID=AF,'):
+                has_af_header = True
+            fout.write(line)
+            continue
+        if line.startswith('#CHROM'):
+            if not has_af_header:
+                fout.write('##FORMAT=<ID=AF,Number=A,Type=Float,Description='
+                           '"Frequency of each ALT allele in the pool, AD[alt] / sum(AD); '
+                           f'missing when DP < {min_dp}">\n')
+            fout.write('##poolAnnotate=<Description="Pooled samples: GT set to missing '
+                       'because diploid genotype calls are not meaningful for pools; '
+                       f'use FORMAT/AD or FORMAT/AF",MinDP={min_dp}>\n')
+            for sample in line.rstrip('\n').split('\t')[9:]:
+                fout.write(f'##SAMPLE=<ID={sample},Pooled=true>\n')
             fout.write(line)
             continue
 
-        # ── variant lines ─────────────────────────────────────────────────────
-        n_total += 1
+        # ── records ───────────────────────────────────────────────────────────
+        n_sites += 1
         fields = line.rstrip('\n').split('\t')
         if len(fields) < 10:
             fout.write(line)
             continue
 
-        fmt    = fields[8]
-        fmt_keys = fmt.split(':')
-
-        # Add AF to FORMAT if not already present
+        n_alt    = 0 if fields[4] == '.' else len(fields[4].split(','))
+        fmt_keys = fields[8].split(':')
         if 'AF' not in fmt_keys:
-            fields[8] = fmt + ':AF'
             fmt_keys.append('AF')
-
+            fields[8] = ':'.join(fmt_keys)
+        gt_idx = fmt_keys.index('GT') if 'GT' in fmt_keys else None
         ad_idx = fmt_keys.index('AD') if 'AD' in fmt_keys else None
         dp_idx = fmt_keys.index('DP') if 'DP' in fmt_keys else None
-        gt_idx = fmt_keys.index('GT') if 'GT' in fmt_keys else None
         af_idx = fmt_keys.index('AF')
 
-        # Process each sample (columns 9+)
-        new_samples = []
-        for sample_field in fields[9:]:
-            sample_vals = sample_field.split(':')
+        for s in range(9, len(fields)):
+            vals = fields[s].split(':')
+            while len(vals) < len(fmt_keys):
+                vals.append('.')
 
-            # Pad sample values if shorter than format keys
-            while len(sample_vals) < len(fmt_keys):
-                sample_vals.append('.')
-
-            # Calculate AF from AD — only if depth meets the minimum threshold
-            af = None
-            dp_ok = True
-            if dp_idx is not None and dp_idx < len(sample_vals):
-                try:
-                    dp_val = sample_vals[dp_idx]
-                    if dp_val in ('.', ''):
-                        dp_ok = False
-                    elif int(dp_val) < min_dp:
-                        dp_ok = False
-                except ValueError:
-                    dp_ok = False
-
-            if dp_ok and ad_idx is not None and ad_idx < len(sample_vals):
-                af = calc_af(sample_vals[ad_idx])
-
-            # Set AF value
-            if af is not None:
-                sample_vals[af_idx] = f'{af:.4f}'
-                n_af_added += 1
-            else:
-                sample_vals[af_idx] = '.'
-
-            # Mask ambiguous GT
-            if gt_idx is not None and gt_idx < len(sample_vals):
-                original_gt = sample_vals[gt_idx]
-                sample_vals[gt_idx] = mask_gt(original_gt, af)
-                if sample_vals[gt_idx] != original_gt:
+            if gt_idx is not None:
+                masked = missing_gt(vals[gt_idx])
+                if masked != vals[gt_idx]:
+                    vals[gt_idx] = masked
                     n_masked += 1
 
-            new_samples.append(':'.join(sample_vals))
+            freqs = None
+            if n_alt and ad_idx is not None and (dp_idx is None or depth_ok(vals[dp_idx])):
+                freqs = allele_freqs(vals[ad_idx], n_alt)
+            if freqs is not None:
+                vals[af_idx] = ','.join(f'{f:.4f}' for f in freqs)
+                n_af += 1
+            else:
+                vals[af_idx] = '.'
 
-        fields[9:] = new_samples
+            fields[s] = ':'.join(vals)
+
         fout.write('\t'.join(fields) + '\n')
 
-print(f"Processed {n_total} variants")
-print(f"AF added: {n_af_added}")
-print(f"GT masked: {n_masked} ({100*n_masked/n_total:.1f}% of variants)" if n_total else "GT masked: 0")
+print(f'Processed {n_sites} sites: {n_masked} genotypes set to missing, '
+      f'AF added for {n_af} sample-sites', file=sys.stderr)
