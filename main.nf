@@ -67,6 +67,11 @@ params.pool_het_lo              = 0.05
 params.pool_het_hi              = 0.95
 params.pool_hom_alt_lo          = 0.95
 
+// Guard: required inputs
+if (!params.samplesheet || !params.reference) {
+    error "ERROR: --samplesheet and --reference are required"
+}
+
 // Guard: --use_gnarly and --dragen_mode are incompatible
 if (params.use_gnarly && params.dragen_mode) {
     error "ERROR: --use_gnarly and --dragen_mode cannot be used together"

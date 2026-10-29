@@ -34,14 +34,17 @@ NF_CONFIG="${PIPELINE_DIR}/nextflow.config"
 SAMPLESHEET="${PIPELINE_DIR}/samplesheet.csv"   # or an absolute path elsewhere
 REFERENCE="/path/to/hg38.fa"
 OUTDIR="${PIPELINE_DIR}/results"
-LSF_QUEUE="normal"
-LSF_PROJECT=""                  # leave empty if not using a project code
+# LSF queues are set per process in nextflow.config (normal/long by label)
 
 # Nextflow work dir — set explicitly so it's always next to the pipeline,
 # not in whatever directory you happened to submit from
 WORK_DIR="${PIPELINE_DIR}/work"
 
 # ── environment ───────────────────────────────────────────────────────────────
+
+for f in "${SAMPLESHEET}" "${REFERENCE}"; do
+    [[ -f "${f}" ]] || { echo "ERROR: ${f} not found -- edit the CONFIG section of $0" >&2; exit 1; }
+done
 
 mkdir -p logs
 
@@ -50,19 +53,15 @@ module load nextflow    # or: export PATH=/path/to/nextflow:$PATH
 # ── run ───────────────────────────────────────────────────────────────────────
 
 NF_OPTS=(
-    --input        "${SAMPLESHEET}"
+    --samplesheet  "${SAMPLESHEET}"
     --reference    "${REFERENCE}"
     --outdir       "${OUTDIR}"
-    --lsf_queue    "${LSF_QUEUE}"
 )
-
-[[ -n "${LSF_PROJECT}" ]] && NF_OPTS+=(--lsf_project "${LSF_PROJECT}")
 
 nextflow run "${MAIN_NF}"        \
     -config  "${NF_CONFIG}"      \
     -work-dir "${WORK_DIR}"      \
     "${NF_OPTS[@]}"              \
-    -profile lsf                 \
     -resume                      \
     -with-report   "${OUTDIR}/reports/nextflow_report.html"  \
     -with-timeline "${OUTDIR}/reports/nextflow_timeline.html" \
