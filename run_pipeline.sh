@@ -34,7 +34,8 @@ NF_CONFIG="${PIPELINE_DIR}/nextflow.config"
 SAMPLESHEET="${PIPELINE_DIR}/samplesheet.csv"   # or an absolute path elsewhere
 REFERENCE="/path/to/hg38.fa"
 OUTDIR="${PIPELINE_DIR}/results"
-# LSF queues are set per process in nextflow.config (normal/long by label)
+# LSF queues are chosen per task in nextflow.config from its requested time
+# (normal <= 12h, long <= 48h, else week)
 
 # Nextflow work dir — set explicitly so it's always next to the pipeline,
 # not in whatever directory you happened to submit from
