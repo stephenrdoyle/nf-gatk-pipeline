@@ -45,7 +45,11 @@ runs, so `-resume` reuses completed GenomicsDBImport tasks.
 ### GATHER_VCFS: --naive concat replaces --allow-overlaps
 With non-overlapping primary intervals concatenated in genomic order,
 `bcftools concat --naive` is safe and significantly faster than
-`--allow-overlaps`. The reheader-before-sort logic is preserved.
+`--allow-overlaps`. The concatenated file is already sorted (groups are in
+`.fai` order and each variant is emitted only by the group it starts in), so
+there is no `bcftools sort`; the `##contig` lines are replaced from the `.fai`
+with `bcftools reheader -h`, which copies the compressed records unchanged.
+`bcftools index` fails on any out-of-order record, so it doubles as a check.
 
 ### Resource reduction
 | Process           | Before       | After (base) | Reason                        |
@@ -65,7 +69,7 @@ A single corrupt GenomicsDB workspace now costs ~1/5th of a chromosome:
 
 ## What stays the same
 
-- Reheader-before-sort in GATHER_VCFS
+- `##contig` header lines rebuilt from the `.fai` in GATHER_VCFS
 - JVM heap headroom formula (task.memory.toGiga() - N)
 - -Dsamjdk.use_intel_deflater=false on HAPLOTYPE_CALLER
 - exit -1 retry for Lustre transport failures
