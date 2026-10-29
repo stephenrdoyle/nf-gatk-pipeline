@@ -36,6 +36,7 @@ include { FILTER_SUMMARY      } from './modules/filter_summary'
 include { MULTIQC             } from './modules/multiqc'
 include { CLEANUP             } from './modules/cleanup'
 include { POOL_ANNOTATE       } from './modules/pool_annotate'
+include { PREFLIGHT           } from './modules/preflight'
 include { SOFTWARE_VERSIONS   } from './modules/software_versions'
 
 // ---------------------------------------------------------------------------
@@ -56,6 +57,56 @@ if (params.use_gnarly && params.dragen_mode) {
 if (params.filter_mode == 'custom' && (!params.snp_filters || !params.indel_filters)) {
     error "ERROR: --filter_mode custom requires --snp_filters and --indel_filters"
 }
+
+// ---------------------------------------------------------------------------
+// Launch preflight: instant checks on the launch host, before anything is
+// submitted. Checks that need the farm's tools (modules, BAM contigs vs the
+// reference) run in the PREFLIGHT process. All problems are reported together.
+// ---------------------------------------------------------------------------
+def preflight_launch_checks() {
+    def problems = []
+    def sheet = file(params.samplesheet)
+    def rows  = sheet.splitCsv(header: true)
+    def cols  = rows ? rows[0].keySet() : []
+    ['sample_id', 'bam'].each { c ->
+        if (!(c in cols)) problems << "samplesheet ${sheet} has no '${c}' column (header: ${cols.join(',') ?: 'empty file'})"
+    }
+
+    if (!problems) {
+        def ids = rows.collect { (it.sample_id ?: '').trim() }
+        if (ids.any { !it }) problems << "samplesheet has rows with an empty sample_id"
+        // sample_id becomes part of file names (<sample_id>.group_NNNN.g.vcf.gz)
+        def unsafe = ids.findAll { it && !(it ==~ /[A-Za-z0-9._-]+/) }
+        if (unsafe) problems << "sample_ids may only use letters, digits, '.', '_' and '-': ${unsafe.take(5).join(', ')}"
+        // duplicates would overwrite each other's GVCFs, silently losing a sample
+        def dups = ids.countBy { it }.findAll { id, n -> id && n > 1 }.keySet()
+        if (dups) problems << "duplicate sample_ids: ${dups.take(5).join(', ')}"
+
+        rows.each { row ->
+            def bam = file(row.bam)
+            if (!bam.exists()) { problems << "${row.sample_id}: BAM not found: ${row.bam}"; return }
+            // same index lookup as parse_samplesheet()
+            def bai = row.bai ? file(row.bai)
+                    : file("${row.bam}.bai").exists() ? file("${row.bam}.bai")
+                    : file(row.bam.replaceAll(/\.bam$/, '.bai'))
+            if (!bai.exists()) problems << "${row.sample_id}: BAM index not found (tried ${row.bai ?: row.bam + '.bai and .bai'})"
+            else if (bai.lastModified() < bam.lastModified()) problems << "${row.sample_id}: index is older than the BAM, so it may be stale: ${bai}"
+        }
+    }
+
+    // .fai/.dict are published beside the reference (GATK reads them there);
+    // that needs write access unless both already exist
+    def ref = file(params.reference)
+    if (!ref.exists()) problems << "reference not found: ${params.reference}"
+    else {
+        def have_index = file("${ref}.fai").exists() && file("${ref.parent}/${ref.baseName}.dict").exists()
+        if (!have_index && !java.nio.file.Files.isWritable(ref.parent))
+            problems << "reference directory ${ref.parent} is not writable, and .fai/.dict must be created there"
+    }
+
+    if (problems) error "Preflight failed (${problems.size()} problem(s)):\n  - " + problems.join('\n  - ')
+}
+preflight_launch_checks()
 
 // ---------------------------------------------------------------------------
 // Helper: parse samplesheet CSV -> [ sample_id, bam_path, bai_path ]
@@ -107,7 +158,19 @@ workflow {
     reference_dict = CREATE_DICT.out.dict
 
     // --- 1. Validate / normalise BAM read groups ---
+    // PREFLIGHT checks tools and BAM contigs; each BAM is held until it
+    // passes. The combine/map only delays the channel: VALIDATE_BAM still gets
+    // exactly [ sample_id, bam, bai ], so cached tasks stay cached.
+    PREFLIGHT(
+        parse_samplesheet(params.samplesheet)
+            .map { sample_id, bam, bai -> "${sample_id}\t${bam}" }
+            .collect()
+            .map { it.join('\n') },
+        reference_fai
+    )
     raw_bams = parse_samplesheet(params.samplesheet)
+        .combine(PREFLIGHT.out.ok)
+        .map { sample_id, bam, bai, ok -> [ sample_id, bam, bai ] }
     VALIDATE_BAM(raw_bams, reference, reference_fai, reference_dict)
     validated_bams = VALIDATE_BAM.out.validated_bam
 
