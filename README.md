@@ -64,13 +64,15 @@ F2_002,/lustre/.../F2_002.bam
 
 ## Running
 
-**On farm22, using the run script:** edit the CONFIG section of `run_pipeline.sh` (`SAMPLESHEET`, `REFERENCE`, `OUTDIR`), then submit it as a long-running job:
+**On farm22, using the run script:** set `PIPELINE_DIR`, `SAMPLESHEET` and `REFERENCE` in the CONFIG section of `run_pipeline.sh`, then submit it from your project directory:
 
 ```bash
-bsub < run_pipeline.sh
+mkdir -p logs && bsub < /path/to/nf-gatk-pipeline/run_pipeline.sh
 ```
 
-It runs with `-resume`, so resubmitting continues a stopped or failed run. Note that it puts the Nextflow work directory next to the pipeline code (`WORK_DIR`), not in the directory you submit from.
+- **Where things go:** `work/`, `results/` and `logs/` are created in the directory you submit from, so each project keeps its own `-resume` history.
+- **The submitted job runs Nextflow itself for the whole pipeline.** It goes on the `week` queue with 8 GB, and Nextflow's own Java heap is capped at 6 GB.
+- **It runs with `-resume`,** so resubmitting from the same directory continues a stopped or failed run.
 
 **Directly:**
 
