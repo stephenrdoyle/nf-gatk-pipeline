@@ -1,32 +1,36 @@
 process GENOMICS_DB_IMPORT {
     /*
-     * Consolidate all per-sample GVCFs for a single interval group
-     * into a GenomicsDB workspace.
+     * Import all samples' GVCFs for one joint-genotyping piece into a
+     * GenomicsDB workspace.
      *
      * Receives:
-     *   group_id      - e.g. "group_0003"
-     *   gvcf_list     - list of all .g.vcf.gz paths for this group
-     *   gvcfi_list    - list of all .g.vcf.gz.tbi paths for this group
-     *   interval_list - the primary (unpadded) interval .list file
+     *   group_id   - HaplotypeCaller window, e.g. "group_0003"
+     *   gvcf_list  - that window's GVCFs, one per sample (name-sorted)
+     *   gvcfi_list - their .tbi indexes
+     *   part_id    - the piece, e.g. "group_0003.part_002"
+     *   interval   - the piece as "contig:start-end": a --genotype_window_size
+     *                slice of the window. The GVCF indexes let GenomicsDB read
+     *                only this slice of each GVCF.
      *
-     * The workspace is named genomicsdb_${group_id} and is emitted
-     * as a directory path for downstream GenotypeGVCFs.
+     * Pieces don't overlap, so workspace boundaries are clean.
      *
-     * Note: uses primary interval (no padding) so workspace boundaries
-     * are clean and non-overlapping across groups.
+     * --consolidate (--genomicsdb_consolidate, default true): samples are
+     * imported in batches of 50, each stored as a separate fragment that
+     * GenotypeGVCFs would otherwise have to merge on every read. Consolidating
+     * merges them once at the end of the import.
      */
 
-    tag { group_id }
+    tag { part_id }
     label 'process_high'
 
     input:
-    tuple val(group_id), path(gvcf_list), path(gvcfi_list), path(interval_list)
+    tuple val(group_id), path(gvcf_list), path(gvcfi_list), val(part_id), val(interval)
     path reference
     path reference_fai
     path reference_dict
 
     output:
-    tuple val(group_id), path("genomicsdb_${group_id}"), path(interval_list), emit: genomicsdb
+    tuple val(part_id), path("genomicsdb_${part_id}"), val(interval), emit: genomicsdb
 
     script:
     def avail_mem = task.memory.toGiga() - 8
@@ -45,16 +49,17 @@ SAMPLEMAP
     gatk GenomicsDBImport \\
         --java-options "-Xmx${avail_mem}g -Xms4g -Dsamjdk.use_intel_deflater=false" \\
         --sample-name-map sample_map.txt \\
-        --genomicsdb-workspace-path genomicsdb_${group_id} \\
-        --intervals ${interval_list} \\
+        --genomicsdb-workspace-path genomicsdb_${part_id} \\
+        --intervals ${interval} \\
         --genomicsdb-shared-posixfs-optimizations true \\
-        --reader-threads 8 \\
+        --reader-threads ${task.cpus} \\
         --batch-size 50 \\
+        --consolidate ${params.genomicsdb_consolidate} \\
         --tmp-dir .
     """
 
     stub:
     """
-    mkdir -p genomicsdb_${group_id}
+    mkdir -p genomicsdb_${part_id}
     """
 }
