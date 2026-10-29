@@ -36,6 +36,7 @@ include { FILTER_SUMMARY      } from './modules/filter_summary'
 include { MULTIQC             } from './modules/multiqc'
 include { CLEANUP             } from './modules/cleanup'
 include { POOL_ANNOTATE       } from './modules/pool_annotate'
+include { SOFTWARE_VERSIONS   } from './modules/software_versions'
 
 // ---------------------------------------------------------------------------
 // Parameter defaults
@@ -99,6 +100,23 @@ def parse_samplesheet(csv_path) {
 // Workflow
 // ---------------------------------------------------------------------------
 workflow {
+
+    // --- Software versions (results/pipeline_info/software_versions.txt) ---
+    // Pipeline commit is read on the launch host; '-dirty' marks uncommitted
+    // changes, i.e. a run whose code isn't exactly any commit
+    def git_commit = 'unknown (not a git checkout)'
+    try {
+        def sha   = "git -C ${projectDir} rev-parse --short HEAD".execute().text.trim()
+        def dirty = "git -C ${projectDir} status --porcelain --untracked-files=no".execute().text.trim()
+        if (sha) git_commit = sha + (dirty ? '-dirty' : '')
+    } catch (Exception e) { }
+    SOFTWARE_VERSIONS([
+        "pipeline: ${workflow.manifest.name} ${workflow.manifest.version}",
+        "git commit: ${git_commit}",
+        "nextflow: ${workflow.nextflow.version}",
+        "run name: ${workflow.runName}",
+        "command: ${workflow.commandLine}",
+    ].join('\n'))
 
     // --- 0. Reference files ---
     reference = file(params.reference, checkIfExists: true)
