@@ -82,6 +82,16 @@ nextflow run main.nf --samplesheet samples.csv --reference genome.fa --outdir re
 
 Run `nextflow` itself somewhere it can stay up for days: an LSF job, `screen`/`tmux` on a head node, or similar. The work directory defaults to `./work` in the launch directory.
 
+**Preflight.** Before any BAM is processed, the pipeline checks its inputs and setup, and stops with one message listing every problem it found:
+- **At launch:**
+  - the samplesheet columns
+  - unique, file-name-safe `sample_id`s
+  - BAMs and indexes exist, and no index is older than its BAM
+  - the reference directory is writable, if `.fai`/`.dict` need creating
+- **In a short first job:**
+  - the modules provide `gatk`, `samtools`, `bcftools` and `python3`
+  - every BAM's contigs match the reference
+
 ## Parameters
 
 Defaults are defined in one place: the `params` block of `nextflow.config`.
