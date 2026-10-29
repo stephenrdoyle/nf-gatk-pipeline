@@ -31,7 +31,7 @@ Each step in more detail:
 7. **`GENOTYPE_FILTER`** sets individual genotypes with low DP or GQ to no-call (`./.`).
 8. **`SPLIT_VARIANTS`** separates SNPs from indels. Mixed sites (SNP and indel alleles at one position) go with the indels.
 9. **The SNP and indel filters** flag failing sites in the `FILTER` column; nothing is removed. **`MERGE_FILTERED`** recombines them into `cohort.filtered.vcf.gz`.
-10. **QC:** bcftools stats, per-sample missingness, and a filter summary, collected into a MultiQC report.
+10. **QC:** bcftools stats and per-sample missingness before filtering (all sites) and after (PASS sites only, since filters only flag sites), plus a per-filter summary, collected into a MultiQC report.
 
 ## Requirements
 
@@ -152,10 +152,11 @@ results/
 ├── cohort.filtered.vcf.gz                 final: sites flagged PASS or by filter name
 ├── cohort.pooled_annotated.vcf.gz         --pooled only: GT masked, FORMAT/AF added
 ├── filter_reports/
-│   ├── filter_summary.tsv                 sites per filter, before/after
+│   ├── filter_summary.tsv                 sites per filter: all, PASS, each filter, "only this filter"
 │   └── {snps,indels}_filter_report.html   optimised mode: thresholds and histograms
-├── bcftools_stats/                        before_filter / after_filter bcftools stats
-├── missingness/after_filter_missingness.tsv   per-sample missing and low-DP genotypes
+├── bcftools_stats/                        before_filter (all sites) / after_filter (PASS sites)
+├── missingness/                           per-sample missing and low-DP genotypes:
+│                                          before_filter (all sites) / after_filter (PASS sites)
 ├── multiqc/multiqc_report.html            QC summary
 ├── pipeline_info/software_versions.txt    tool and module versions, git commit, command line
 ├── pipeline_trace_<timestamp>.txt         one row per task attempt (see below)
