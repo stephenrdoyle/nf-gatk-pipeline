@@ -23,7 +23,7 @@ This is the most important change. Previously one channel item per chromosome
 fed GenomicsDBImport. Now:
 
   HAPLOTYPE_CALLER emits: [ sample_id, group_id, gvcf, tbi ]
-      ↓ .map + .groupTuple(by: 0) on group_id
+      ↓ .map to groupKey(group_id, n_samples) + .groupTuple(by: 0, sort by name)
   gvcfs_by_group:          [ group_id, [gvcf×N], [tbi×N] ]
       ↓ .join with interval_by_group
   genomicsdb_input:        [ group_id, [gvcf×N], [tbi×N], interval_list ]
@@ -32,9 +32,12 @@ fed GenomicsDBImport. Now:
       ↓ collect + toSortedList
   GATHER_VCFS:             single cohort VCF
 
-The `groupTuple` will block until ALL samples have completed HaplotypeCaller
-for a given group before releasing that group to GenomicsDBImport. This is
-correct behaviour — you want the full cohort in each workspace.
+Because the `groupKey` carries the sample count, `groupTuple` releases each
+group as soon as ALL samples have completed HaplotypeCaller for that group,
+without waiting for the other groups. (A plain `groupTuple` with no size would
+hold every group until the whole HaplotypeCaller stage had finished.) Sorting
+the grouped GVCFs by name keeps the sample map and task hash stable between
+runs, so `-resume` reuses completed GenomicsDBImport tasks.
 
 ### GATHER_VCFS: --naive concat replaces --allow-overlaps
 With non-overlapping primary intervals concatenated in genomic order,

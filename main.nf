@@ -133,9 +133,19 @@ workflow {
     )
 
     // --- 4. Reshape for GenomicsDBImport ---
+    // groupKey carries the expected group size (one GVCF per sample), so each
+    // group is released as soon as all its samples finish HaplotypeCaller,
+    // rather than when every HaplotypeCaller job in the run has finished.
+    // Sorting the grouped files by name makes the GVCF list (and so the
+    // sample map and task hash) identical between runs, so -resume reuses
+    // completed GenomicsDBImport tasks instead of re-running them.
+    n_samples = raw_bams.count()
+
     gvcfs_by_group = HAPLOTYPE_CALLER.out.gvcfs
-        .map { sample_id, group_id, gvcf, tbi -> [ group_id, gvcf, tbi ] }
-        .groupTuple(by: 0)
+        .combine(n_samples)
+        .map { sample_id, group_id, gvcf, tbi, n -> [ groupKey(group_id, n), gvcf, tbi ] }
+        .groupTuple(by: 0, sort: { a, b -> a.name <=> b.name })
+        .map { key, gvcfs, tbis -> [ key.getGroupTarget(), gvcfs, tbis ] }
 
     interval_by_group = interval_ch
         .map { list_file -> [ list_file.baseName, list_file ] }
