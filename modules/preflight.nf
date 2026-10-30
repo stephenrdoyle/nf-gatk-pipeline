@@ -3,7 +3,7 @@ process PREFLIGHT {
      * Checks that need the farm's tools, run once before any BAM is processed
      * (main.nf holds VALIDATE_BAM, and so HaplotypeCaller, until this passes):
      *   - the process.beforeScript modules provide gatk, samtools, bcftools
-     *     and python3
+     *     (with its setGT plugin) and python3
      *   - every BAM's @SQ contigs (names, lengths, order) match the
      *     reference .fai; GATK refuses mismatched dictionaries, and would
      *     otherwise fail once per window for each bad BAM
@@ -35,6 +35,11 @@ process PREFLIGHT {
         command -v "\$tool" >/dev/null 2>&1 \\
             || fail "'\$tool' not found: check the module load lines in process.beforeScript (nextflow.config)"
     done
+    # GENOTYPE_FILTER uses the bcftools setGT plugin
+    if command -v bcftools >/dev/null 2>&1; then
+        bcftools plugin -l 2>/dev/null | grep -qw setGT \\
+            || fail "bcftools plugin 'setGT' not found (needed by GENOTYPE_FILTER): check BCFTOOLS_PLUGINS / the bcftools module"
+    fi
 
     # ── BAM contigs vs reference ──────────────────────────────────────────────
     cut -f1,2 ${fai} > reference_contigs.tsv

@@ -6,8 +6,9 @@ process SAMPLE_MISSINGNESS {
      *   before_filter  cohort.genotyped.vcf.gz, all sites: genotypes as
      *                  GATK called them
      *   after_filter   cohort.filtered.vcf.gz, PASS sites only: the data you
-     *                  keep, after per-genotype DP/GQ no-calls; low-DP counts
-     *                  come from the genotype filter's FORMAT/FT
+     *                  keep, after per-genotype DP/GQ no-calls
+     * Low-DP counts are genotypes with FORMAT/DP below --genotype_dp_threshold
+     * (the genotype filter's DP rule), counted the same way at both stages.
      * pass_only restricts both the counts and the low-DP tally to PASS sites,
      * so failed sites (which are discarded anyway) don't inflate missingness.
      *
@@ -36,26 +37,28 @@ process SAMPLE_MISSINGNESS {
     set -o pipefail
 
     # ── 1. per-sample called / missing genotypes: from ${stats} (input) ──────
-    # ── 2. LowDP genotypes per sample, split SNP / indel ──────────────────────
+    # ── 2. Low-depth genotypes (FORMAT/DP < --genotype_dp_threshold) per
+    #       sample, split SNP / indel; nothing is counted if no threshold ──
     # A site is a SNP when REF and every ALT allele are single bases
     # (multiallelic SNPs included); anything else counts as an indel.
     bcftools view --threads ${task.cpus} ${filter_arg} --no-header ${vcf} | \\
-        awk '
-        BEGIN { OFS="\\t" }
+        awk -v thr='${params.genotype_dp_threshold ?: 0}' '
+        BEGIN { OFS="\\t"; skip = (thr + 0 <= 0) }   # read all input (no early exit: SIGPIPE under pipefail)
         {
+            if (skip) next
             n_alt = split(\$5, alts, ",")
             type = (length(\$4) == 1) ? "SNP" : "INDEL"
             for (a = 1; a <= n_alt; a++)
                 if (length(alts[a]) != 1 || alts[a] == "*") type = "INDEL"
 
             n = split(\$9, fmt_keys, ":")
-            ft_idx = 0
-            for (i = 1; i <= n; i++) if (fmt_keys[i] == "FT") { ft_idx = i; break }
-            if (ft_idx == 0) next   # no genotype filter on this record
+            dp_idx = 0
+            for (i = 1; i <= n; i++) if (fmt_keys[i] == "DP") { dp_idx = i; break }
+            if (dp_idx == 0) next   # no FORMAT/DP on this record
 
             for (s = 10; s <= NF; s++) {
                 n_vals = split(\$s, vals, ":")
-                if (ft_idx <= n_vals && vals[ft_idx] ~ /LowDP/) print s - 9, type
+                if (dp_idx <= n_vals && vals[dp_idx] != "." && vals[dp_idx] + 0 < thr + 0) print s - 9, type
             }
         }
         ' > lowdp_hits.txt

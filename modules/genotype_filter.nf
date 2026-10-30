@@ -1,4 +1,23 @@
 process GENOTYPE_FILTER {
+    /*
+     * Per-genotype filter on the whole cohort VCF: genotypes with low depth
+     * (DP) or low genotype quality (GQ / RGQ) are set to missing (./.).
+     *
+     * bcftools +setGT does this in one pass with multithreaded compression.
+     * GATK VariantFiltration evaluated a JEXL expression for every sample at
+     * every site, single-threaded: 7.6 h for the 200-sample F2 cohort.
+     *
+     * Same rules as before:
+     *   DP  < --genotype_dp_threshold    always
+     *   GQ  < --genotype_gq_threshold    not with --pooled (GQ is meaningless
+     *                                    for pools) or --use_gnarly (no GQ)
+     *   RGQ < --genotype_rgq_threshold   --use_gnarly only, if set
+     * A missing value (e.g. DP '.') never fails a filter, as in GATK.
+     *
+     * Unlike GATK, failed genotypes get no FORMAT/FT tag; SAMPLE_MISSINGNESS
+     * counts low-depth genotypes from FORMAT/DP directly. The site FILTER
+     * column is left as it was ('.'), and the site filters set PASS later.
+     */
     tag "genotype_filter"
     label 'process_low'
 
@@ -6,49 +25,23 @@ process GENOTYPE_FILTER {
 
     input:
     tuple path(vcf), path(tbi)
-    path reference
-    path reference_fai
-    path reference_dict
 
     output:
     tuple path("cohort.genotype_filtered.vcf.gz"), path("cohort.genotype_filtered.vcf.gz.tbi"), emit: filtered_vcf
 
     script:
-    // Same reference form as HAPLOTYPE_CALLER / GENOTYPE_GVCFS: the real path,
-    // with symlinks (e.g. lustre_link) resolved. GATK runs in a Singularity
-    // wrapper, so a resolved /lustre path doesn't depend on the container
-    // also seeing a staged symlink's target; .fai/.dict are published next
-    // to the real FASTA by SAMTOOLS_FAIDX / CREATE_DICT
-    def ref_abs = reference.toRealPath()
-    // Heap tied to the LSF request: without -Xmx the JVM sizes its heap from
-    // the node's RAM, not task.memory, and LSF kills the job (exit 130)
-    def java_opts = "-Xmx${task.memory.toGiga() - 4}g -Dsamjdk.use_intel_deflater=false"
-    // GQ filter — skipped for pooled samples (GQ not meaningful for pools)
-    //           — skipped for GnarlyGenotyper output (GQ not emitted; use RGQ instead)
-    def gq_filter = (!params.pooled && !params.use_gnarly && params.genotype_gq_threshold)
-        ? "--genotype-filter-expression \"GQ < ${params.genotype_gq_threshold}\" --genotype-filter-name \"LowGQ\""
-        : ''
-
-    // RGQ filter — only applied when using GnarlyGenotyper (--use_gnarly)
-    // RGQ = Reference Genotype Quality: confidence a site is hom-ref
-    // Analogous to GQ but specific to GnarlyGenotyper output
-    def rgq_filter = (params.use_gnarly && !params.pooled && params.genotype_rgq_threshold)
-        ? "--genotype-filter-expression \"RGQ < ${params.genotype_rgq_threshold}\" --genotype-filter-name \"LowRGQ\""
-        : ''
-
-    // DP filter — applied regardless of mode
-    def dp_filter = params.genotype_dp_threshold
-        ? "--genotype-filter-expression \"DP < ${params.genotype_dp_threshold}\" --genotype-filter-name \"LowDP\""
-        : ''
+    def conditions = []
+    if (params.genotype_dp_threshold)
+        conditions << "FMT/DP<${params.genotype_dp_threshold}"
+    if (!params.pooled && !params.use_gnarly && params.genotype_gq_threshold)
+        conditions << "FMT/GQ<${params.genotype_gq_threshold}"
+    if (params.use_gnarly && !params.pooled && params.genotype_rgq_threshold)
+        conditions << "FMT/RGQ<${params.genotype_rgq_threshold}"
+    def set_gt = conditions
+        ? "bcftools +setGT --threads ${task.cpus} -Oz -o cohort.genotype_filtered.vcf.gz ${vcf} -- -t q -n . -i '${conditions.join(' | ')}'"
+        : "bcftools view --threads ${task.cpus} -Oz -o cohort.genotype_filtered.vcf.gz ${vcf}"   // no thresholds set
     """
-    gatk VariantFiltration \\
-        --java-options "${java_opts}" \\
-        --reference ${ref_abs} \\
-        --variant ${vcf} \\
-        ${gq_filter} \\
-        ${rgq_filter} \\
-        ${dp_filter} \\
-        --set-filtered-genotype-to-no-call true \\
-        --output cohort.genotype_filtered.vcf.gz
+    ${set_gt}
+    bcftools index --tbi --threads ${task.cpus} cohort.genotype_filtered.vcf.gz
     """
 }
