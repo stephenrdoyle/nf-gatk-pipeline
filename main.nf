@@ -49,6 +49,11 @@ if (!params.samplesheet || !params.reference) {
     error "ERROR: --samplesheet and --reference are required"
 }
 
+// Guard: joint-genotyping piece size
+if (!(params.genotype_window_size instanceof Number) || params.genotype_window_size < 1) {
+    error "ERROR: --genotype_window_size must be a positive number of bp (got ${params.genotype_window_size})"
+}
+
 // Guard: --use_gnarly and --dragen_mode are incompatible
 if (params.use_gnarly && params.dragen_mode) {
     error "ERROR: --use_gnarly and --dragen_mode cannot be used together"
@@ -201,15 +206,37 @@ workflow {
         .combine(n_samples)
         .map { sample_id, group_id, gvcf, tbi, n -> [ groupKey(group_id, n), gvcf, tbi ] }
         .groupTuple(by: 0, sort: { a, b -> a.name <=> b.name })
-        .map { key, gvcfs, tbis -> [ key.getGroupTarget(), gvcfs, tbis ] }
+        .map { key, gvcfs, tbis -> [ key.getGroupTarget().toString(), gvcfs, tbis ] }
 
-    interval_by_group = interval_ch
-        .map { list_file -> [ list_file.baseName, list_file ] }
+    // Joint-genotyping pieces: each HaplotypeCaller window cut into slices of
+    // --genotype_window_size for GenomicsDBImport and GenotypeGVCFs, so those
+    // run as many shorter jobs. Computed here, not in MAKE_INTERVALS, so the
+    // HaplotypeCaller windows (and their cache) are unchanged.
+    // Emits [ group_id, part_id, "contig:start-end" ]; part_ids sort in
+    // genomic order (group_0000.part_000, group_0000.part_001, ...).
+    genotype_pieces = interval_ch.flatMap { list_file ->
+        def group_id = list_file.baseName
+        def size     = params.genotype_window_size as long
+        def pieces   = []
+        list_file.readLines().findAll { it.trim() }.each { line ->
+            def colon  = line.lastIndexOf(':')
+            def contig = line.substring(0, colon)
+            def range  = line.substring(colon + 1).tokenize('-')*.toLong()
+            for (long s = range[0]; s <= range[1]; s += size) {
+                pieces << "${contig}:${s}-${Math.min(s + size - 1, range[1])}".toString()
+            }
+        }
+        pieces.withIndex().collect { iv, i ->
+            [ group_id, "${group_id}.part_${String.format('%03d', i)}".toString(), iv ]
+        }
+    }
 
+    // Each window's GVCFs go to every piece of that window
     genomicsdb_input = gvcfs_by_group
-        .join(interval_by_group, by: 0)
+        .combine(genotype_pieces, by: 0)
+        // [ group_id, gvcfs, tbis, part_id, interval ]
 
-    // --- 5. GenomicsDBImport: per-interval, all samples ---
+    // --- 5. GenomicsDBImport: per piece, all samples ---
     GENOMICS_DB_IMPORT(
         genomicsdb_input,
         reference,
@@ -217,7 +244,7 @@ workflow {
         reference_dict
     )
 
-    // --- 6. Genotype: GenotypeGVCFs or GnarlyGenotyper per-interval ---
+    // --- 6. Genotype: GenotypeGVCFs or GnarlyGenotyper, per piece ---
     if (params.use_gnarly) {
         GNARLY_GENOTYPER(
             GENOMICS_DB_IMPORT.out.genomicsdb,
@@ -236,9 +263,9 @@ workflow {
         genotyped_vcfs = GENOTYPE_GVCFS.out.vcf
     }
 
-    // --- 7. Gather all interval VCFs into final cohort VCF ---
+    // --- 7. Gather all piece VCFs, in part_id (= genomic) order, into the cohort VCF ---
     all_vcfs = genotyped_vcfs
-        .map { group_id, vcf, tbi -> [ group_id, vcf, tbi ] }
+        .map { part_id, vcf, tbi -> [ part_id, vcf, tbi ] }
         .toSortedList { a, b -> a[0] <=> b[0] }
         .map { sorted ->
             [ sorted.collect { it[1] }, sorted.collect { it[2] } ]
