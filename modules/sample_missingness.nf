@@ -10,6 +10,9 @@ process SAMPLE_MISSINGNESS {
      *                  come from the genotype filter's FORMAT/FT
      * pass_only restricts both the counts and the low-DP tally to PASS sites,
      * so failed sites (which are discarded anyway) don't inflate missingness.
+     *
+     * Called/missing counts come from BCFTOOLS_STATS for the same stage
+     * (same VCF, same pass_only) rather than a second bcftools stats pass.
      */
     tag "${label}"
     label 'process_low'
@@ -18,6 +21,7 @@ process SAMPLE_MISSINGNESS {
 
     input:
     tuple path(vcf), path(tbi)
+    path stats       // BCFTOOLS_STATS output for this stage (same pass_only)
     val  label       // "before_filter" or "after_filter"
     val  pass_only   // true: only sites whose FILTER is PASS (or '.')
 
@@ -31,13 +35,11 @@ process SAMPLE_MISSINGNESS {
     # pipe below would leave empty low-DP counts and a task that "succeeded"
     set -o pipefail
 
-    # ── 1. per-sample called / missing genotypes ──────────────────────────────
-    bcftools stats ${filter_arg} --samples - ${vcf} > bcftools_stats.txt
-
+    # ── 1. per-sample called / missing genotypes: from ${stats} (input) ──────
     # ── 2. LowDP genotypes per sample, split SNP / indel ──────────────────────
     # A site is a SNP when REF and every ALT allele are single bases
     # (multiallelic SNPs included); anything else counts as an indel.
-    bcftools view ${filter_arg} --no-header ${vcf} | \\
+    bcftools view --threads ${task.cpus} ${filter_arg} --no-header ${vcf} | \\
         awk '
         BEGIN { OFS="\\t" }
         {
@@ -75,7 +77,7 @@ with open('sample_names.txt') as f:
 # by position, because the layout varies between bcftools versions
 # (in 1.19 nMissing is column [14], not [11] = nSingletons)
 psc_cols = None
-with open('bcftools_stats.txt') as f:
+with open('${stats}') as f:
     for line in f:
         parts = line.rstrip('\\n').split('\\t')
         if line.startswith('SN') and 'number of records' in line:

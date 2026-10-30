@@ -20,7 +20,7 @@ process POOL_ANNOTATE {
     # Python step would leave a truncated VCF and a task that "succeeded"
     set -o pipefail
     pool_annotate.py ${vcf} - ${min_dp} \\
-        | bcftools view -O z -o cohort.pooled_annotated.vcf.gz -
+        | bcftools view --threads ${task.cpus} -O z -o cohort.pooled_annotated.vcf.gz -
     bcftools index --tbi cohort.pooled_annotated.vcf.gz
     """
 }

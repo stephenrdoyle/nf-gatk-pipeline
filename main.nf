@@ -193,7 +193,7 @@ workflow {
 
     // --- 8. Stats + per-sample missingness on the raw cohort VCF (all sites) ---
     BCFTOOLS_STATS_RAW(cohort_vcf, 'before_filter', false)
-    SAMPLE_MISSINGNESS_RAW(cohort_vcf, 'before_filter', false)
+    SAMPLE_MISSINGNESS_RAW(cohort_vcf, BCFTOOLS_STATS_RAW.out.stats, 'before_filter', false)
 
     // --- 9. Per-genotype filter (DP / GQ / RGQ) ---
     GENOTYPE_FILTER(cohort_vcf, reference, reference_fai, reference_dict)
@@ -249,7 +249,7 @@ workflow {
     // pooled mode every GT is then masked, which would report every sample
     // as 100% missing. Without --pooled merged_vcf is the final VCF.
     BCFTOOLS_STATS_FILTERED(merged_vcf, 'after_filter', true)
-    SAMPLE_MISSINGNESS_FILTERED(merged_vcf, 'after_filter', true)
+    SAMPLE_MISSINGNESS_FILTERED(merged_vcf, BCFTOOLS_STATS_FILTERED.out.stats, 'after_filter', true)
 
     // --- 15. Filter summary: sites per filter, from the filtered VCFs ---
     FILTER_SUMMARY(filt_snps_ch, filt_indels_ch)

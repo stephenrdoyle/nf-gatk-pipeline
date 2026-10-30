@@ -23,6 +23,6 @@ process BCFTOOLS_STATS {
     script:
     def filter_arg = pass_only ? "--apply-filters 'PASS,.'" : ''
     """
-    bcftools stats ${filter_arg} --samples - ${vcf} > ${label}_bcftools_stats.txt
+    bcftools stats --threads ${task.cpus} ${filter_arg} --samples - ${vcf} > ${label}_bcftools_stats.txt
     """
 }
