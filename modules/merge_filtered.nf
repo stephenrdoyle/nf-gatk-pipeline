@@ -2,7 +2,7 @@ process MERGE_FILTERED {
     tag "merge"
     label 'process_low'
 
-    publishDir "${params.outdir}", mode: 'copy'
+    publishDir "${params.outdir}", mode: params.publish_mode
 
     input:
     tuple path(snp_vcf),   path(snp_tbi)

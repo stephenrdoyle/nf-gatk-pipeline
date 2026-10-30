@@ -2,7 +2,7 @@ process POOL_ANNOTATE {
     tag "pool_annotate"
     label 'process_low'
 
-    publishDir "${params.outdir}", mode: 'copy'
+    publishDir "${params.outdir}", mode: params.publish_mode
 
     input:
     tuple path(vcf), path(tbi)
