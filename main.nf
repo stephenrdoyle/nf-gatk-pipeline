@@ -37,6 +37,7 @@ include { FILTER_SUMMARY      } from './modules/filter_summary'
 include { MULTIQC             } from './modules/multiqc'
 include { CLEANUP             } from './modules/cleanup'
 include { POOL_ANNOTATE       } from './modules/pool_annotate'
+include { ESTIMATE_HETEROZYGOSITY; HETEROZYGOSITY_SUMMARY } from './modules/heterozygosity'
 include { PREFLIGHT           } from './modules/preflight'
 include { SOFTWARE_VERSIONS   } from './modules/software_versions'
 
@@ -52,6 +53,12 @@ if (!params.samplesheet || !params.reference) {
 // Guard: joint-genotyping piece size
 if (!(params.genotype_window_size instanceof Number) || params.genotype_window_size < 1) {
     error "ERROR: --genotype_window_size must be a positive number of bp (got ${params.genotype_window_size})"
+}
+
+// Guard: --heterozygosity is unset, 'auto', or a fraction
+if (params.heterozygosity != null && params.heterozygosity != 'auto' &&
+        !(params.heterozygosity instanceof Number && params.heterozygosity > 0 && params.heterozygosity < 1)) {
+    error "ERROR: --heterozygosity must be 'auto' or a number between 0 and 1 (got ${params.heterozygosity})"
 }
 
 // Guard: --use_gnarly and --dragen_mode are incompatible
@@ -215,6 +222,40 @@ workflow {
     VALIDATE_BAM(raw_bams, reference, reference_fai, reference_dict)
     validated_bams = VALIDATE_BAM.out.validated_bam
 
+    // --- Heterozygosity prior for GenotypeGVCFs (--heterozygosity) ---
+    //   unset   GATK's defaults (0.001 SNP, 1.25e-4 indel)
+    //   number  that value; indels = --indel_heterozygosity or SNP x 0.125
+    //   'auto'  estimated from the BAMs with ANGSD (modules/heterozygosity.nf),
+    //           alongside HaplotypeCaller, from the first
+    //           --heterozygosity_max_samples samples by sample_id
+    // Not applied in pooled mode (ANGSD's per-sample model assumes diploid
+    // individuals) or with --use_gnarly (GnarlyGenotyper takes no such prior).
+    def use_prior = params.heterozygosity != null && !params.pooled && !params.use_gnarly
+    if (params.heterozygosity != null && !use_prior) {
+        log.warn "--heterozygosity is ignored with ${params.pooled ? '--pooled' : '--use_gnarly'}: GATK's default priors are used"
+    }
+    if (use_prior && params.heterozygosity == 'auto') {
+        ESTIMATE_HETEROZYGOSITY(
+            validated_bams
+                .toSortedList { a, b -> a[0] <=> b[0] }
+                .flatMap { it.take(params.heterozygosity_max_samples as int) },
+            reference,
+            reference_fai,
+            params.heterozygosity_sample_bp
+        )
+        HETEROZYGOSITY_SUMMARY(
+            ESTIMATE_HETEROZYGOSITY.out.sfs.collect(),
+            params.indel_heterozygosity ?: ''
+        )
+        gatk_prior_args = HETEROZYGOSITY_SUMMARY.out.args.map { it.text.trim() }
+    } else if (use_prior) {
+        def het   = params.heterozygosity as double
+        def indel = params.indel_heterozygosity ? params.indel_heterozygosity as double : het * 0.125
+        gatk_prior_args = Channel.value("--heterozygosity ${het} --indel-heterozygosity ${String.format('%.3g', indel)}".toString())
+    } else {
+        gatk_prior_args = Channel.value('')
+    }
+
     // --- 2. Generate interval lists from .fai ---
     MAKE_INTERVALS(reference_fai, params.window_size)
     interval_ch = MAKE_INTERVALS.out.interval_lists.flatten()
@@ -291,6 +332,7 @@ workflow {
     } else {
         GENOTYPE_GVCFS(
             GENOMICS_DB_IMPORT.out.genomicsdb,
+            gatk_prior_args,
             reference,
             reference_fai,
             reference_dict
