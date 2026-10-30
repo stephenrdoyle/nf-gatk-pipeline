@@ -31,7 +31,8 @@ include { CUSTOM_FILTER       } from './modules/custom_filter'
 include { MERGE_FILTERED      } from './modules/merge_filtered'
 include { BCFTOOLS_STATS as BCFTOOLS_STATS_RAW      } from './modules/bcftools_stats'
 include { BCFTOOLS_STATS as BCFTOOLS_STATS_FILTERED } from './modules/bcftools_stats'
-include { SAMPLE_MISSINGNESS  } from './modules/sample_missingness'
+include { SAMPLE_MISSINGNESS as SAMPLE_MISSINGNESS_RAW      } from './modules/sample_missingness'
+include { SAMPLE_MISSINGNESS as SAMPLE_MISSINGNESS_FILTERED } from './modules/sample_missingness'
 include { FILTER_SUMMARY      } from './modules/filter_summary'
 include { MULTIQC             } from './modules/multiqc'
 include { CLEANUP             } from './modules/cleanup'
@@ -190,8 +191,9 @@ workflow {
         .combine(GATHER_VCFS.out.tbi)
     // cohort_vcf: [ cohort.genotyped.vcf.gz, cohort.genotyped.vcf.gz.tbi ]
 
-    // --- 8. Stats on raw cohort VCF ---
-    BCFTOOLS_STATS_RAW(cohort_vcf, 'before_filter')
+    // --- 8. Stats + per-sample missingness on the raw cohort VCF (all sites) ---
+    BCFTOOLS_STATS_RAW(cohort_vcf, 'before_filter', false)
+    SAMPLE_MISSINGNESS_RAW(cohort_vcf, 'before_filter', false)
 
     // --- 9. Per-genotype filter (DP / GQ / RGQ) ---
     GENOTYPE_FILTER(cohort_vcf, reference, reference_fai, reference_dict)
@@ -210,19 +212,13 @@ workflow {
     if (params.filter_mode == 'optimised') {
         OPTIMISED_FILTER(split_ch, reference, reference_fai, reference_dict)
         filtered_ch = OPTIMISED_FILTER.out.filtered_vcf
-        snp_summary   = OPTIMISED_FILTER.out.summary.filter { it.getName().startsWith('snps') }
-        indel_summary = OPTIMISED_FILTER.out.summary.filter { it.getName().startsWith('indels') }
     } else if (params.filter_mode == 'custom') {
         CUSTOM_FILTER(split_ch, reference, reference_fai, reference_dict)
         filtered_ch   = CUSTOM_FILTER.out.filtered_vcf
-        snp_summary   = CUSTOM_FILTER.out.summary.filter   { it.getName().startsWith('snps') }
-        indel_summary = CUSTOM_FILTER.out.summary.filter   { it.getName().startsWith('indels') }
     } else {
         // default: hard filter
         HARD_FILTER(split_ch, reference, reference_fai, reference_dict)
         filtered_ch   = HARD_FILTER.out.filtered_vcf
-        snp_summary   = HARD_FILTER.out.summary.filter   { it.getName().startsWith('snps') }
-        indel_summary = HARD_FILTER.out.summary.filter   { it.getName().startsWith('indels') }
     }
 
     // Separate filtered SNP and INDEL channels for merging
@@ -247,28 +243,22 @@ workflow {
         final_vcf = merged_vcf
     }
 
-    // --- 14. Stats on filtered VCF + per-sample missingness ---
-    // Run on merged_vcf, before pool annotation: in pooled mode every GT is
-    // then masked, which would report every sample as 100% missing. Here,
-    // missing still means "failed the genotype DP filter". Without --pooled
-    // merged_vcf is the final VCF.
-    BCFTOOLS_STATS_FILTERED(merged_vcf, 'after_filter')
-    SAMPLE_MISSINGNESS(merged_vcf, 'after_filter')
+    // --- 14. Stats + per-sample missingness on the filtered VCF, PASS sites ---
+    // Filters only flag sites, so without restricting to PASS these would
+    // count failed sites too. Run on merged_vcf, before pool annotation: in
+    // pooled mode every GT is then masked, which would report every sample
+    // as 100% missing. Without --pooled merged_vcf is the final VCF.
+    BCFTOOLS_STATS_FILTERED(merged_vcf, 'after_filter', true)
+    SAMPLE_MISSINGNESS_FILTERED(merged_vcf, 'after_filter', true)
 
-    // --- 15. Filter summary report ---
-    FILTER_SUMMARY(
-        SPLIT_VARIANTS.out.snps,
-        SPLIT_VARIANTS.out.indels,
-        filt_snps_ch,
-        filt_indels_ch,
-        snp_summary,
-        indel_summary
-    )
+    // --- 15. Filter summary: sites per filter, from the filtered VCFs ---
+    FILTER_SUMMARY(filt_snps_ch, filt_indels_ch)
 
     // --- 16. MultiQC ---
     multiqc_files = BCFTOOLS_STATS_RAW.out.stats
         .mix(BCFTOOLS_STATS_FILTERED.out.stats)
-        .mix(SAMPLE_MISSINGNESS.out.missingness)
+        .mix(SAMPLE_MISSINGNESS_RAW.out.missingness)
+        .mix(SAMPLE_MISSINGNESS_FILTERED.out.missingness)
         .mix(FILTER_SUMMARY.out.summary)
         .collect()
     MULTIQC(multiqc_files)

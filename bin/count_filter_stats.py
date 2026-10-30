@@ -1,107 +1,82 @@
 #!/usr/bin/env python3
 """
-Count variants before and after filtering from a filtered VCF,
-and merge with a filter threshold TSV to produce a combined summary.
+Summarise site filtering from the filtered SNP and indel VCFs.
+
+Counts come from each VCF's FILTER column, and each filter's expression from
+its ##FILTER header line (VariantFiltration writes the expression as the
+description), so the summary is the same whichever filter mode produced the
+VCF: hard, optimised, custom or DRAGEN.
+
+Output (stdout, TSV), one row per variant type and filter:
+  id            unique row key (MultiQC tables are keyed on the first column)
+  variant_type  SNPs | Indels (incl. mixed)
+  filter        "(all sites)", PASS, or a filter name
+  expression    the filter's expression from the VCF header
+  n_sites       sites with this FILTER value (PASS: sites passing everything)
+  pct_sites     n_sites as % of all sites of this type
+  n_only        sites failed by this filter and no other
+Filters that flagged no sites are not listed.
 
 Usage:
-    count_filter_stats.py <raw_vcf> <filtered_vcf> <variant_type> [<threshold_tsv>]
-
-    threshold_tsv is optional — for hard/custom filters where thresholds
-    are fixed, pass a pre-built TSV. For optimised filters, pass the TSV
-    produced by optimised_filter.py. If omitted, threshold columns are NA.
-
-Output:
-    {variant_type}_counts.tsv   — written to current directory
+    count_filter_stats.py snps=<snps.vcf.gz> indels=<indels.vcf.gz> > filter_summary.tsv
 """
-import sys, subprocess, csv, os
+import re
+import subprocess
+import sys
+from collections import Counter
 
-raw_vcf      = sys.argv[1]
-filtered_vcf = sys.argv[2]
-variant_type = sys.argv[3]
-threshold_tsv = sys.argv[4] if len(sys.argv) > 4 else None
+TYPE_NAMES = {'snps': 'SNPs', 'indels': 'Indels (incl. mixed)'}
 
-def count_variants(vcf):
-    """Count PASS and total variants using bcftools stats — memory efficient."""
-    result = subprocess.run(
-        ['bcftools', 'stats', vcf],
-        capture_output=True, text=True
-    )
-    total   = 0
-    passing = 0
-    for line in result.stdout.splitlines():
-        # SN section: summary numbers
-        if line.startswith('SN') and 'number of records' in line:
-            total = int(line.strip().split()[-1])
-        if line.startswith('SN') and 'number of no-ALTs' in line:
-            # subtract ref-only records if any
-            pass
-    # Count PASS using shell pipe to wc -l — avoids loading records into Python memory
-    pass_result = subprocess.run(
-        'bcftools view -H -f PASS,. ' + vcf + ' | wc -l',
-        shell=True, capture_output=True, text=True
-    )
-    passing = int(pass_result.stdout.strip()) if pass_result.stdout.strip() else 0
-    flagged = total - passing
-    return total, passing, flagged
+def filter_expressions(vcf):
+    """FILTER ID -> description (the filter expression) from the header."""
+    header = subprocess.run(['bcftools', 'view', '--header-only', vcf],
+                            check=True, capture_output=True, text=True).stdout
+    found = {}
+    for line in header.splitlines():
+        m = re.match(r'##FILTER=<ID=([^,>]+)(?:,Description="(.*)")?>', line)
+        if m:
+            found[m.group(1)] = m.group(2) or ''
+    return found
 
-total_before, pass_before, _ = count_variants(raw_vcf)
-total_after,  pass_after, flagged_after = count_variants(filtered_vcf)
+def filter_combinations(vcf):
+    """Count of each FILTER value ('PASS', 'A', 'A;B', ...) across all sites."""
+    counts = Counter()
+    proc = subprocess.Popen(['bcftools', 'query', '--format', '%FILTER\n', vcf],
+                            stdout=subprocess.PIPE, text=True)
+    for line in proc.stdout:
+        counts[line.rstrip('\n')] += 1
+    if proc.wait() != 0:
+        # a silent bcftools failure would otherwise report zero sites
+        sys.exit(f'ERROR: bcftools query failed on {vcf} (exit {proc.returncode})')
+    return counts
 
-print(f"{variant_type}: {total_before} variants before, {pass_after} PASS after filtering ({flagged_after} flagged)")
+def rows_for(vtype, vcf):
+    name = TYPE_NAMES.get(vtype, vtype)
+    expressions = filter_expressions(vcf)
+    combos = filter_combinations(vcf)
+    total = sum(combos.values())
+    pct = lambda n: f'{100 * n / total:.2f}' if total else '0.00'
 
-# Load threshold data if provided
-thresholds = {}
-if threshold_tsv and os.path.exists(threshold_tsv):
-    with open(threshold_tsv) as f:
-        reader = csv.DictReader(f, delimiter='\t')
-        for row in reader:
-            ann = row['annotation']
-            thresholds[ann] = row
+    n_pass = combos.get('PASS', 0) + combos.get('.', 0)
+    per_filter, only = Counter(), Counter()
+    for value, n in combos.items():
+        if value in ('PASS', '.'):
+            continue
+        names = value.split(';')
+        for f in names:
+            per_filter[f] += n
+        if len(names) == 1:
+            only[names[0]] += n
 
-# Write combined counts TSV
-out_file = f"{variant_type}_counts.tsv"
-with open(out_file, 'w') as f:
-    header = [
-        'variant_type', 'annotation', 'operator', 'threshold',
-        'n_total_before', 'n_pass_before',
-        'n_total_after',  'n_pass_after', 'n_flagged',
-        'pct_flagged_by_filter', 'pct_flagged_overall',
-        'mean', 'median'
-    ]
-    f.write('\t'.join(header) + '\n')
+    yield [f'{name}: all sites', name, '(all sites)', '', total, pct(total), '']
+    yield [f'{name}: PASS', name, 'PASS', 'passes every filter', n_pass, pct(n_pass), '']
+    for f, n in sorted(per_filter.items(), key=lambda kv: -kv[1]):
+        yield [f'{name}: {f}', name, f, expressions.get(f, ''), n, pct(n), only[f]]
 
-    if thresholds:
-        for ann, row in thresholds.items():
-            # Hard/custom TSVs carry 'NA' here (only optimised mode counts
-            # per-annotation flags), so pass the value through untouched
-            n_flag_ann = row.get('n_flagged') or 'NA'
-            pct_ann    = row.get('pct_flagged', 'NA')
-            pct_overall = round(100 * flagged_after / total_before, 2) if total_before else 0
-            f.write('\t'.join([
-                variant_type,
-                ann,
-                row.get('operator', 'NA'),
-                row.get('threshold', 'NA'),
-                str(total_before),
-                str(pass_before),
-                str(total_after),
-                str(pass_after),
-                str(n_flag_ann),
-                str(pct_ann),
-                str(pct_overall),
-                row.get('mean', 'NA'),
-                row.get('median', 'NA'),
-            ]) + '\n')
-    else:
-        # No per-annotation data (hard/custom without threshold TSV)
-        pct_overall = round(100 * flagged_after / total_before, 2) if total_before else 0
-        f.write('\t'.join([
-            variant_type, 'all', 'NA', 'NA',
-            str(total_before), str(pass_before),
-            str(total_after),  str(pass_after),
-            str(flagged_after),
-            'NA', str(pct_overall),
-            'NA', 'NA'
-        ]) + '\n')
-
-print(f"Counts written: {out_file}")
+out = sys.stdout
+out.write('\t'.join(['id', 'variant_type', 'filter', 'expression',
+                     'n_sites', 'pct_sites', 'n_only']) + '\n')
+for arg in sys.argv[1:]:
+    vtype, vcf = arg.split('=', 1)
+    for row in rows_for(vtype, vcf):
+        out.write('\t'.join(str(x) for x in row) + '\n')
