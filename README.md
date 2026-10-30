@@ -112,6 +112,7 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 | `--genotype_gq_threshold` | `20` | Genotypes with `GQ` below this are set to no-call (not in pooled or Gnarly mode) |
 | `--heterozygosity` | — | GenotypeGVCFs' heterozygosity prior: unset = GATK default (0.001), a number, or `auto` (estimated from the BAMs, see [Modes](#modes)) |
 | `--indel_heterozygosity` | — | Indel prior; unset = `--heterozygosity` × 0.125 |
+| `--heterozygosity_stdev` | — | GATK's `--heterozygosity-stdev`; unset = √(heterozygosity ÷ 10), which keeps the prior's strength at GATK's default so only its mean moves |
 | `--genotype_rgq_threshold` | — | Gnarly mode: genotypes with `RGQ` below this are set to no-call |
 | `--use_gnarly` | `false` | Joint-genotype with GnarlyGenotyper instead of GenotypeGVCFs |
 | `--pooled` | `false` | Samples are pools, not individuals (see [Modes](#modes)) |
