@@ -3,23 +3,21 @@ process GNARLY_GENOTYPER {
      * GnarlyGenotyper: faster alternative to GenotypeGVCFs for large cohorts.
      * Incompatible with --dragen_mode (guard enforced in main.nf).
      *
-     * Updated to use path(interval_list) to match the interval-scatter design,
-     * replacing the old val(interval_arg) pattern.
-     * Emit name changed to 'vcf' to match GENOTYPE_GVCFS — both branches
-     * in main.nf feed into the same genotyped_vcfs channel.
+     * Same inputs and outputs as GENOTYPE_GVCFS (one joint-genotyping piece,
+     * "contig:start-end"), so both feed the same genotyped_vcfs channel.
      */
 
-    tag { group_id }
+    tag { part_id }
     label 'process_high'
 
     input:
-    tuple val(group_id), path(genomicsdb), path(interval_list)
+    tuple val(part_id), path(genomicsdb), val(interval)   // interval: "contig:start-end"
     path reference
     path reference_fai
     path reference_dict
 
     output:
-    tuple val(group_id), path("${group_id}.genotyped.vcf.gz"), path("${group_id}.genotyped.vcf.gz.tbi"), emit: vcf
+    tuple val(part_id), path("${part_id}.genotyped.vcf.gz"), path("${part_id}.genotyped.vcf.gz.tbi"), emit: vcf
 
     script:
     def avail_mem = task.memory.toGiga() - 8
@@ -29,15 +27,15 @@ process GNARLY_GENOTYPER {
         --java-options "-Xmx${avail_mem}g -Xms4g -Dsamjdk.use_intel_deflater=false" \\
         --reference ${ref_abs} \\
         --variant gendb://${genomicsdb} \\
-        --output ${group_id}.genotyped.vcf.gz \\
-        --intervals ${interval_list} \\
+        --output ${part_id}.genotyped.vcf.gz \\
+        --intervals ${interval} \\
         --only-output-calls-starting-in-intervals \\
         --tmp-dir .
     """
 
     stub:
     """
-    touch ${group_id}.genotyped.vcf.gz
-    touch ${group_id}.genotyped.vcf.gz.tbi
+    touch ${part_id}.genotyped.vcf.gz
+    touch ${part_id}.genotyped.vcf.gz.tbi
     """
 }

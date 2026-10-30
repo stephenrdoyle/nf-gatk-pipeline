@@ -1,8 +1,8 @@
 process GENOTYPE_GVCFS {
     /*
-     * Genotype a single GenomicsDB workspace.
-     * Outputs one VCF per interval group — these are concatenated
-     * downstream by GATHER_VCFS into the cohort VCF.
+     * Genotype one joint-genotyping piece's GenomicsDB workspace.
+     * Outputs one VCF per piece; GATHER_VCFS concatenates them, in
+     * part_id order, into the cohort VCF.
      *
      * --intervals restricts genotyping to the primary (unpadded) interval.
      * On its own that still emits any record that merely overlaps the
@@ -14,17 +14,17 @@ process GENOTYPE_GVCFS {
      * GNARLY_GENOTYPER uses the same flag.
      */
 
-    tag { group_id }
+    tag { part_id }
     label 'process_high'
 
     input:
-    tuple val(group_id), path(genomicsdb), path(interval_list)
+    tuple val(part_id), path(genomicsdb), val(interval)   // interval: "contig:start-end"
     path reference
     path reference_fai
     path reference_dict
 
     output:
-    tuple val(group_id), path("${group_id}.genotyped.vcf.gz"), path("${group_id}.genotyped.vcf.gz.tbi"), emit: vcf
+    tuple val(part_id), path("${part_id}.genotyped.vcf.gz"), path("${part_id}.genotyped.vcf.gz.tbi"), emit: vcf
 
     script:
     def avail_mem = task.memory.toGiga() - 8
@@ -34,8 +34,8 @@ process GENOTYPE_GVCFS {
         --java-options "-Xmx${avail_mem}g -Xms4g -Dsamjdk.use_intel_deflater=false" \\
         --reference ${ref_abs} \\
         --variant gendb://${genomicsdb} \\
-        --output ${group_id}.genotyped.vcf.gz \\
-        --intervals ${interval_list} \\
+        --output ${part_id}.genotyped.vcf.gz \\
+        --intervals ${interval} \\
         --only-output-calls-starting-in-intervals \\
         --genomicsdb-shared-posixfs-optimizations true \\
         --tmp-dir .
@@ -43,7 +43,7 @@ process GENOTYPE_GVCFS {
 
     stub:
     """
-    touch ${group_id}.genotyped.vcf.gz
-    touch ${group_id}.genotyped.vcf.gz.tbi
+    touch ${part_id}.genotyped.vcf.gz
+    touch ${part_id}.genotyped.vcf.gz.tbi
     """
 }
