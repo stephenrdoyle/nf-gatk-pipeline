@@ -224,7 +224,8 @@ workflow {
 
     // --- Heterozygosity prior for GenotypeGVCFs (--heterozygosity) ---
     //   unset   GATK's defaults (0.001 SNP, 1.25e-4 indel)
-    //   number  that value; indels = --indel_heterozygosity or SNP x 0.125
+    //   number  that value; indels = --indel_heterozygosity or SNP x 0.125;
+    //           --heterozygosity-stdev = --heterozygosity_stdev or sqrt(het / 10)
     //   'auto'  estimated from the BAMs with ANGSD (modules/heterozygosity.nf),
     //           alongside HaplotypeCaller, from the first
     //           --heterozygosity_max_samples samples by sample_id
@@ -245,13 +246,18 @@ workflow {
         )
         HETEROZYGOSITY_SUMMARY(
             ESTIMATE_HETEROZYGOSITY.out.sfs.collect(),
-            params.indel_heterozygosity ?: ''
+            params.indel_heterozygosity ?: '',
+            params.heterozygosity_stdev ?: ''
         )
         gatk_prior_args = HETEROZYGOSITY_SUMMARY.out.args.map { it.text.trim() }
     } else if (use_prior) {
         def het   = params.heterozygosity as double
         def indel = params.indel_heterozygosity ? params.indel_heterozygosity as double : het * 0.125
-        gatk_prior_args = Channel.value("--heterozygosity ${het} --indel-heterozygosity ${String.format('%.3g', indel)}".toString())
+        // stdev = sqrt(het / 10) keeps the prior's strength at GATK's default;
+        // see modules/heterozygosity.nf
+        def stdev = params.heterozygosity_stdev ? params.heterozygosity_stdev as double : Math.sqrt(het / 10)
+        gatk_prior_args = Channel.value(("--heterozygosity ${het} --indel-heterozygosity ${String.format('%.3g', indel)} " +
+                                         "--heterozygosity-stdev ${String.format('%.3g', stdev)}").toString())
     } else {
         gatk_prior_args = Channel.value('')
     }

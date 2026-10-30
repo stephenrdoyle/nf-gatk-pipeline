@@ -13,6 +13,16 @@
  *                          to 3 significant figures so the value - and so
  *                          GenotypeGVCFs' cache - is stable between runs.
  *
+ * GATK builds its allele-frequency prior from heterozygosity AND
+ * --heterozygosity-stdev (default 0.01): reference pseudocount =
+ * heterozygosity / stdev^2, alt pseudocount = heterozygosity x that. Raising
+ * heterozygosity alone therefore also makes the prior proportionally
+ * STRONGER and concentrated near a low allele frequency, which penalises
+ * intermediate-frequency variants (5-sample F2 test: ~191k positions lost).
+ * So the stdev is set to sqrt(heterozygosity / 10), keeping the reference
+ * pseudocount at GATK's default of 10 (0.001 / 0.01^2): the prior's mean
+ * moves to the estimate, its strength stays at GATK's default.
+ *
  * For a randomly mating population an individual's expected heterozygosity
  * equals the nucleotide diversity GATK's prior stands for. Per-sample
  * estimates also keep memory flat for any cohort size. Requires paired-end
@@ -86,6 +96,7 @@ process HETEROZYGOSITY_SUMMARY {
     input:
     path sfs_files          // <sample_id>.sfs, one per sampled sample
     val  indel_override     // --indel_heterozygosity, or '' to scale from SNPs
+    val  stdev_override     // --heterozygosity_stdev, or '' for sqrt(heterozygosity / 10)
 
     output:
     path "heterozygosity_estimate.txt", emit: report
@@ -94,7 +105,7 @@ process HETEROZYGOSITY_SUMMARY {
     script:
     """
     python3 << 'PYEOF'
-import glob, statistics
+import glob, math, statistics
 
 rows = []
 for f in sorted(glob.glob('*.sfs')):
@@ -113,16 +124,23 @@ if not used:
 het = float(f'{statistics.median(r[2] for r in used):.3g}')
 indel_override = "${indel_override}".strip()
 indel = float(indel_override) if indel_override else float(f'{het * 0.125:.3g}')
+# Keep the prior's strength at GATK's default (reference pseudocount
+# het / stdev^2 = 10) so only its mean moves; see the module header
+stdev_override = "${stdev_override}".strip()
+stdev = float(stdev_override) if stdev_override else float(f'{math.sqrt(het / 10):.3g}')
+args = f'--heterozygosity {het} --indel-heterozygosity {indel} --heterozygosity-stdev {stdev}'
 
 with open('gatk_prior_args.txt', 'w') as f:
-    f.write(f'--heterozygosity {het} --indel-heterozygosity {indel}')
+    f.write(args)
 
 with open('heterozygosity_estimate.txt', 'w') as f:
     f.write('# --heterozygosity auto (ANGSD per-sample SFS, ${params.angsd_container})\\n')
     f.write(f'heterozygosity (SNP prior)       {het}   median of {len(used)} sample(s)\\n')
     f.write(f'indel heterozygosity (prior)     {indel}   '
             f'{"from --indel_heterozygosity" if indel_override else "SNP x 0.125 (GATK default ratio)"}\\n')
-    f.write(f'GenotypeGVCFs arguments          --heterozygosity {het} --indel-heterozygosity {indel}\\n\\n')
+    f.write(f'heterozygosity stdev (prior)     {stdev}   '
+            f'{"from --heterozygosity_stdev" if stdev_override else "sqrt(heterozygosity / 10): prior strength = GATK default"}\\n')
+    f.write(f'GenotypeGVCFs arguments          {args}\\n\\n')
     f.write('sample\\tsites\\theterozygosity\\tused\\n')
     for name, sites, h in rows:
         f.write(f'{name}\\t{sites:.0f}\\t{h:.5f}\\t{"yes" if (name, sites, h) in used else "no (low coverage)"}\\n')
