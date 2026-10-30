@@ -1,0 +1,50 @@
+# Code checks for every pull request and push to main. Neither job runs GATK
+# or touches real data; they catch the classes of bug that previously only
+# showed up hours into a farm run.
+name: checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  scripts:
+    name: Module scripts (bash -n, embedded Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # Renders every script:/stub: block as Groovy would (interpolation and
+      # escapes), then runs bash -n and compiles embedded Python
+      - run: python3 tests/check_scripts.py
+
+  nextflow:
+    name: Nextflow parse (-preview)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      # Same version as the farm's `module load nextflow` (nextflow/25.10.4)
+      # (recorded in results/pipeline_info/software_versions.txt)
+      - uses: nf-core/setup-nextflow@v2
+        with:
+          version: '25.10.4'
+      - name: Config parses
+        run: nextflow config -flat > /dev/null
+      # -preview compiles main.nf and every module and builds the workflow
+      # without running any task: catches Groovy errors, missing includes and
+      # processes called with the wrong inputs. tests/data holds empty BAMs
+      # and a tiny FASTA; nothing reads their contents.
+      - name: Workflow compiles and builds
+        run: |
+          touch tests/data/*.bai   # checkout order can leave an index older than its BAM
+          nextflow run main.nf -preview -profile local \
+            --samplesheet tests/data/samplesheet.csv \
+            --reference tests/data/reference.fa \
+            --outdir ci_results
