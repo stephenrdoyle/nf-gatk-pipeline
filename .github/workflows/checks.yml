@@ -30,11 +30,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      # Keep in step with the farm's `module load nextflow` version
+      # Same version as the farm's `module load nextflow` (nextflow/25.10.4)
       # (recorded in results/pipeline_info/software_versions.txt)
       - uses: nf-core/setup-nextflow@v2
         with:
-          version: '24.10.4'
+          version: '25.10.4'
       - name: Config parses
         run: nextflow config -flat > /dev/null
       # -preview compiles main.nf and every module and builds the workflow
