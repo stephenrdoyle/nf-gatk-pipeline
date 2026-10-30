@@ -19,6 +19,9 @@ include { SAMTOOLS_FAIDX      } from './modules/samtools_faidx'
 include { CREATE_DICT         } from './modules/create_dict'
 include { MAKE_INTERVALS      } from './modules/make_intervals'
 include { HAPLOTYPE_CALLER    } from './modules/haplotype_caller'
+include { HAPLOTYPE_CALLER_DRAGEN } from './modules/haplotype_caller'
+include { COMPOSE_STR_TABLE   } from './modules/dragstr'
+include { CALIBRATE_DRAGSTR   } from './modules/dragstr'
 include { GENOMICS_DB_IMPORT  } from './modules/genomics_db_import'
 include { GENOTYPE_GVCFS      } from './modules/genotype_gvcfs'
 include { GNARLY_GENOTYPER    } from './modules/gnarly_genotyper'
@@ -57,6 +60,12 @@ if (!(params.genotype_window_size instanceof Number) || params.genotype_window_s
 // Guard: --use_gnarly and --dragen_mode are incompatible
 if (params.use_gnarly && params.dragen_mode) {
     error "ERROR: --use_gnarly and --dragen_mode cannot be used together"
+}
+
+// DRAGEN's QUAL hard filter replaces the GATK hard filters only in 'hard'
+// mode; optimised/custom thresholds are applied as requested
+if (params.dragen_mode && params.filter_mode != 'hard') {
+    log.warn "--dragen_mode with --filter_mode ${params.filter_mode}: the DRAGEN QUAL hard filter is only used in 'hard' mode"
 }
 
 // Guard: custom filter mode requires filter expressions
@@ -220,13 +229,34 @@ workflow {
     interval_ch = MAKE_INTERVALS.out.interval_lists.flatten()
 
     // --- 3. HaplotypeCaller: per-sample x per-interval ---
-    HAPLOTYPE_CALLER(
-        validated_bams,
-        interval_ch,
-        reference,
-        reference_fai,
-        reference_dict
-    )
+    if (params.dragen_mode) {
+        // DRAGEN-GATK: calibrate a DRAGstr model per sample, then call with it
+        COMPOSE_STR_TABLE(reference, reference_fai, reference_dict)
+        CALIBRATE_DRAGSTR(
+            validated_bams,
+            reference,
+            reference_fai,
+            reference_dict,
+            COMPOSE_STR_TABLE.out.str_table
+        )
+        HAPLOTYPE_CALLER_DRAGEN(
+            validated_bams.join(CALIBRATE_DRAGSTR.out.params),
+            interval_ch,
+            reference,
+            reference_fai,
+            reference_dict
+        )
+        hc_gvcfs = HAPLOTYPE_CALLER_DRAGEN.out.gvcfs
+    } else {
+        HAPLOTYPE_CALLER(
+            validated_bams,
+            interval_ch,
+            reference,
+            reference_fai,
+            reference_dict
+        )
+        hc_gvcfs = HAPLOTYPE_CALLER.out.gvcfs
+    }
 
     // --- 4. Reshape for GenomicsDBImport ---
     // groupKey carries the expected group size (one GVCF per sample), so each
@@ -237,7 +267,7 @@ workflow {
     // completed GenomicsDBImport tasks instead of re-running them.
     n_samples = raw_bams.count()
 
-    gvcfs_by_group = HAPLOTYPE_CALLER.out.gvcfs
+    gvcfs_by_group = hc_gvcfs
         .combine(n_samples)
         .map { sample_id, group_id, gvcf, tbi, n -> [ groupKey(group_id, n), gvcf, tbi ] }
         .groupTuple(by: 0, sort: { a, b -> a.name <=> b.name })
@@ -394,7 +424,7 @@ workflow {
     if (params.cleanup) {
         cleanup_targets = Channel.empty()
             .mix(
-                HAPLOTYPE_CALLER.out.gvcfs.map        { sample_id, group_id, gvcf, tbi -> gvcf },
+                hc_gvcfs.map                          { sample_id, group_id, gvcf, tbi -> gvcf },
                 GENOMICS_DB_IMPORT.out.genomicsdb.map { group_id, db, interval_list -> db },
                 genotyped_vcfs.map                    { group_id, vcf, tbi -> vcf },
                 cohort_vcf.map                        { vcf, tbi -> vcf },
