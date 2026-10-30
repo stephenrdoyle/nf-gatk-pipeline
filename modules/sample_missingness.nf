@@ -73,7 +73,7 @@ with open('sample_names.txt') as f:
 psc_cols = None
 with open('bcftools_stats.txt') as f:
     for line in f:
-        parts = line.rstrip('\n').split('\t')
+        parts = line.rstrip('\\n').split('\\t')
         if line.startswith('SN') and 'number of records' in line:
             total_sites = int(parts[-1])
         elif line.startswith('# PSC'):
