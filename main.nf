@@ -100,6 +100,16 @@ workflow {
     // --- 0. Reference files ---
     reference = file(params.reference, checkIfExists: true)
 
+    // .fai/.dict beside the FASTA are never overwritten (see SAMTOOLS_FAIDX),
+    // so an index left over from an older FASTA would be used as-is: refuse
+    // one that is older than the FASTA
+    [ file("${reference}.fai"), file("${reference.parent}/${reference.baseName}.dict") ].each { idx ->
+        if (idx.exists() && idx.lastModified() < reference.lastModified()) {
+            error "ERROR: ${idx} is older than the reference FASTA, so it may describe a previous " +
+                  "version of it. Delete it and relaunch; the pipeline will recreate it."
+        }
+    }
+
     SAMTOOLS_FAIDX(reference)
     reference_fai = SAMTOOLS_FAIDX.out.fai
 
