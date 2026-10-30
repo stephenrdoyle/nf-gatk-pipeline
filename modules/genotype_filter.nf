@@ -2,7 +2,7 @@ process GENOTYPE_FILTER {
     tag "genotype_filter"
     label 'process_low'
 
-    publishDir "${params.outdir}", mode: 'copy', pattern: "cohort.genotype_filtered.vcf.gz*"
+    publishDir "${params.outdir}", mode: params.publish_mode, pattern: "cohort.genotype_filtered.vcf.gz*"
 
     input:
     tuple path(vcf), path(tbi)
