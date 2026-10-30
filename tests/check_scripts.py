@@ -125,6 +125,16 @@ for nf in sorted(glob.glob(os.path.join(ROOT, 'modules', '*.nf'))):
             except SyntaxError as e:
                 failures.append(f'{where}: embedded Python ({label}), line {e.lineno}: {e.msg}: {(e.text or "").strip()!r}')
 
+# Containers are assigned only in nextflow.config (withName ... container =).
+# Singularity is enabled globally, so a container/conda directive left in a
+# module would silently move that process off its farm module - changing its
+# cache key and, for VALIDATE_BAM, re-running every HaplotypeCaller job.
+for nf in sorted(glob.glob(os.path.join(ROOT, 'modules', '*.nf'))):
+    for n, line in enumerate(open(nf), 1):
+        if re.match(r'\s*(container|conda)\s', line):
+            failures.append(f'{os.path.relpath(nf, ROOT)}:{n}: process declares its own '
+                            f'{line.split()[0]}; assign containers in nextflow.config instead')
+
 for py in sorted(glob.glob(os.path.join(ROOT, 'bin', '*.py'))):
     try:
         compile(open(py).read(), py, 'exec')

@@ -2,9 +2,6 @@ process VALIDATE_BAM {
     tag "${sample_id}"
     label 'process_low'
 
-    conda 'bioconda::samtools=1.19'
-    container 'biocontainers/samtools:1.19--h50ea8bc_1'
-
     input:
     tuple val(sample_id), path(bam), path(bai)
     path reference

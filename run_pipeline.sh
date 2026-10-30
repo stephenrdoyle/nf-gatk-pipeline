@@ -38,6 +38,11 @@ REFERENCE="/path/to/reference.fa"
 OUTDIR="${PWD}/results"
 WORK_DIR="${PWD}/work"
 
+# Singularity image cache (used only by containerised steps, e.g. ANGSD for
+# --heterozygosity auto). Point it at a shared Lustre directory to reuse
+# images across projects.
+SINGULARITY_CACHE="${PWD}/singularity_cache"
+
 # LSF queues for the pipeline's own tasks are chosen per task in
 # nextflow.config from its requested time (normal <= 12h, long <= 48h, else week)
 
@@ -57,7 +62,9 @@ mkdir -p logs
 set +u
 source /etc/profile.d/modules.sh
 module load nextflow    # or: export PATH=/path/to/nextflow:$PATH
+module load ISG/singularity/3.11.4   # Nextflow pulls container images itself
 set -u
+export NXF_SINGULARITY_CACHEDIR="${NXF_SINGULARITY_CACHEDIR:-${SINGULARITY_CACHE}}"
 
 # Nextflow's own JVM: without a heap limit it sizes the heap from the node's
 # RAM, not this job's -M, and LSF kills the whole run. Keep it below -M.
