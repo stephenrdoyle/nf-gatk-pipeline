@@ -4,3 +4,4 @@ work/
 results/
 logs/
 .DS_Store
+ci_results/
