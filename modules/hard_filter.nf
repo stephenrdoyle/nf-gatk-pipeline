@@ -13,46 +13,48 @@ process HARD_FILTER {
     path "${variant_type}_filter_summary.tsv", emit: summary
 
     script:
-    def filters = variant_type == 'snps' ? """
-        --filter-expression "QD < 2.0"               --filter-name "SNP_QD2" \\
-        --filter-expression "MQ < 40.0"              --filter-name "SNP_MQ40" \\
-        --filter-expression "FS > 60.0"              --filter-name "SNP_FS60" \\
-        --filter-expression "SOR > 3.0"              --filter-name "SNP_SOR3" \\
-        --filter-expression "MQRankSum < -12.5"      --filter-name "SNP_MQRankSum-12.5" \\
-        --filter-expression "ReadPosRankSum < -8.0"  --filter-name "SNP_ReadPosRankSum-8"
-    """ : """
-        --filter-expression "QD < 2.0"               --filter-name "INDEL_QD2" \\
-        --filter-expression "FS > 200.0"             --filter-name "INDEL_FS200" \\
-        --filter-expression "SOR > 10.0"             --filter-name "INDEL_SOR10" \\
-        --filter-expression "ReadPosRankSum < -20.0" --filter-name "INDEL_ReadPosRankSum-20"
-    """
+    // Same reference form as HAPLOTYPE_CALLER / GENOTYPE_GVCFS: the real path,
+    // with symlinks (e.g. lustre_link) resolved. GATK runs in a Singularity
+    // wrapper, so a resolved /lustre path doesn't depend on the container
+    // also seeing a staged symlink's target; .fai/.dict are published next
+    // to the real FASTA by SAMTOOLS_FAIDX / CREATE_DICT
+    def ref_abs = reference.toRealPath()
+    // Heap tied to the LSF request: without -Xmx the JVM sizes its heap from
+    // the node's RAM, not task.memory, and LSF kills the job (exit 130)
+    def java_opts = "-Xmx${task.memory.toGiga() - 4}g -Dsamjdk.use_intel_deflater=false"
+    // [ annotation, operator, threshold, filter name ] — single source for both
+    // the VariantFiltration arguments and the threshold TSV
+    def filters = variant_type == 'snps' ? [
+        [ 'QD',             '<', '2.0',   'SNP_QD2'                ],
+        [ 'MQ',             '<', '40.0',  'SNP_MQ40'               ],
+        [ 'FS',             '>', '60.0',  'SNP_FS60'               ],
+        [ 'SOR',            '>', '3.0',   'SNP_SOR3'               ],
+        [ 'MQRankSum',      '<', '-12.5', 'SNP_MQRankSum-12.5'     ],
+        [ 'ReadPosRankSum', '<', '-8.0',  'SNP_ReadPosRankSum-8'   ],
+    ] : [
+        [ 'QD',             '<', '2.0',   'INDEL_QD2'              ],
+        [ 'FS',             '>', '200.0', 'INDEL_FS200'            ],
+        [ 'SOR',            '>', '10.0',  'INDEL_SOR10'            ],
+        [ 'ReadPosRankSum', '<', '-20.0', 'INDEL_ReadPosRankSum-20'],
+    ]
+    def filter_args = filters.collect { ann, op, thr, name ->
+        "--filter-expression \"${ann} ${op} ${thr}\" --filter-name \"${name}\""
+    }.join(' \\\n        ')
+    def summary_rows = filters.collect { ann, op, thr, name ->
+        [ variant_type, ann, op, thr, 'NA', 'NA', 'NA', 'NA', 'NA' ].join('\t')
+    }.join('\n')
     """
     gatk VariantFiltration \\
-        --reference ${reference} \\
+        --java-options "${java_opts}" \\
+        --reference ${ref_abs} \\
         --variant ${vcf} \\
-        ${filters} \\
+        ${filter_args} \\
         --output ${variant_type}.hard_filtered.vcf.gz
 
     # Write threshold TSV for downstream summary
-    python3 -c "
-import sys
-vtype = '${variant_type}'
-snp_filters = [
-    ('QD','lt',2.0),('MQ','lt',40.0),('FS','gt',60.0),
-    ('SOR','gt',3.0),('MQRankSum','lt',-12.5),('ReadPosRankSum','lt',-8.0)
-]
-indel_filters = [
-    ('QD','lt',2.0),('FS','gt',200.0),
-    ('SOR','gt',10.0),('ReadPosRankSum','lt',-20.0)
-]
-filters = snp_filters if vtype == 'snps' else indel_filters
-with open(f'{vtype}_filter_summary.tsv', 'w') as f:
-    f.write('variant_type	annotation	operator	threshold	n_total	n_flagged	pct_flagged	mean	median
-')
-    for ann, direction, val in filters:
-        op = '<' if direction == 'lt' else '>'
-        f.write(f'{vtype}	{ann}	{op}	{val}	NA	NA	NA	NA	NA
-')
-"
+    cat > ${variant_type}_filter_summary.tsv << 'TSV'
+variant_type\tannotation\toperator\tthreshold\tn_total\tn_flagged\tpct_flagged\tmean\tmedian
+${summary_rows}
+TSV
     """
 }

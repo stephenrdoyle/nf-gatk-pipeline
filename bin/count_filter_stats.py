@@ -72,7 +72,9 @@ with open(out_file, 'w') as f:
 
     if thresholds:
         for ann, row in thresholds.items():
-            n_flag_ann = int(row.get('n_flagged', 0))
+            # Hard/custom TSVs carry 'NA' here (only optimised mode counts
+            # per-annotation flags), so pass the value through untouched
+            n_flag_ann = row.get('n_flagged') or 'NA'
             pct_ann    = row.get('pct_flagged', 'NA')
             pct_overall = round(100 * flagged_after / total_before, 2) if total_before else 0
             f.write('\t'.join([

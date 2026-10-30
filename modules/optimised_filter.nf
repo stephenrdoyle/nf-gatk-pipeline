@@ -16,6 +16,15 @@ process OPTIMISED_FILTER {
     path "${variant_type}_filter_summary.tsv",        emit: summary
 
     script:
+    // Same reference form as HAPLOTYPE_CALLER / GENOTYPE_GVCFS: the real path,
+    // with symlinks (e.g. lustre_link) resolved. GATK runs in a Singularity
+    // wrapper, so a resolved /lustre path doesn't depend on the container
+    // also seeing a staged symlink's target; .fai/.dict are published next
+    // to the real FASTA by SAMTOOLS_FAIDX / CREATE_DICT
+    def ref_abs = reference.toRealPath()
+    // Heap tied to the LSF request: without -Xmx the JVM sizes its heap from
+    // the node's RAM, not task.memory, and LSF kills the job (exit 130)
+    def java_opts = "-Xmx${task.memory.toGiga() - 4}g -Dsamjdk.use_intel_deflater=false"
     def lo_pct  = params.filter_percentile_lo as int
     def ann_str = variant_type == 'snps'
                   ? 'QD,MQ,FS,SOR,MQRankSum,ReadPosRankSum'
@@ -26,7 +35,8 @@ process OPTIMISED_FILTER {
     """
     # Extract annotation values from VCF
     gatk VariantsToTable \\
-        --reference ${reference} \\
+        --java-options "${java_opts}" \\
+        --reference ${ref_abs} \\
         --variant ${vcf} \\
         ${gatk_f} \\
         --output annotations.tsv
@@ -44,7 +54,8 @@ process OPTIMISED_FILTER {
     # negative numbers and spaces in filter expressions
     source filter_args.sh
     gatk VariantFiltration \\
-        --reference ${reference} \\
+        --java-options "${java_opts}" \\
+        --reference ${ref_abs} \\
         --variant ${vcf} \\
         "\${FILTER_ARGS[@]}" \\
         --output ${variant_type}.optimised_filtered.vcf.gz

@@ -67,31 +67,38 @@ samples     = {}
 with open('sample_names.txt') as f:
     sample_names = [l.strip() for l in f if l.strip()]
 
-# Parse bcftools stats
+# Parse bcftools stats. PSC columns are located by name from the '# PSC'
+# header line rather than by position, because the layout varies between
+# bcftools versions (in 1.19 nMissing is column [14], not [11]=nSingletons)
+psc_cols = None
 with open('bcftools_stats.txt') as f:
     for line in f:
+        parts = line.rstrip('\\n').split('\\t')
         if line.startswith('SN') and 'number of records' in line:
-            total_sites = int(line.strip().split()[-1])
-        if line.startswith('PSC') and not line.startswith('# PSC'):
-            parts = line.strip().split('\\t')
-            if len(parts) >= 9:
-                sample      = parts[2]
-                missing     = int(parts[10]) if len(parts) > 10 else 0
-                hom_rr      = int(parts[3])
-                hom_aa      = int(parts[4])
-                het         = int(parts[5])
-                called      = hom_rr + hom_aa + het
-                pct_missing = round(100 * missing / total_sites, 4) if total_sites else 0
-                pct_called  = round(100 * called  / total_sites, 4) if total_sites else 0
-                samples[sample] = {
-                    'total_sites':   total_sites,
-                    'n_called':      called,
-                    'n_missing':     missing,
-                    'pct_called':    pct_called,
-                    'pct_missing':   pct_missing,
-                    'n_lowdp_snp':   0,
-                    'n_lowdp_indel': 0,
-                }
+            total_sites = int(parts[-1])
+        elif line.startswith('# PSC'):
+            # '[4]nRefHom' -> 'nRefHom'
+            psc_cols = {h.split(']', 1)[-1]: i for i, h in enumerate(parts)}
+        elif line.startswith('PSC'):
+            if psc_cols is None or 'nMissing' not in psc_cols:
+                raise SystemExit('ERROR: bcftools stats PSC section has no nMissing column')
+            sample      = parts[psc_cols['sample']]
+            missing     = int(parts[psc_cols['nMissing']])
+            hom_rr      = int(parts[psc_cols['nRefHom']])
+            hom_aa      = int(parts[psc_cols['nNonRefHom']])
+            het         = int(parts[psc_cols['nHets']])
+            called      = hom_rr + hom_aa + het
+            pct_missing = round(100 * missing / total_sites, 4) if total_sites else 0
+            pct_called  = round(100 * called  / total_sites, 4) if total_sites else 0
+            samples[sample] = {
+                'total_sites':   total_sites,
+                'n_called':      called,
+                'n_missing':     missing,
+                'pct_called':    pct_called,
+                'pct_missing':   pct_missing,
+                'n_lowdp_snp':   0,
+                'n_lowdp_indel': 0,
+            }
 
 # Count LowDP hits from awk output (sample_index is 1-based)
 with open('lowdp_hits.txt') as f:

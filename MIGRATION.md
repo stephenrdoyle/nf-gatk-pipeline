@@ -16,14 +16,17 @@ The primary interval is still the unpadded window. The padding flag tells
 HaplotypeCaller to extend its active region search 200 bp either side of the
 interval boundary, ensuring variants at boundaries are called with full
 haplotype context. The output GVCF still only contains records within the
-padded region — GenotypeGVCFs trims back to the primary interval.
+padded region. GenomicsDBImport imports only the primary interval, and
+GenotypeGVCFs runs with `--only-output-calls-starting-in-intervals`, so each
+variant is emitted only by the group in which it starts — no duplicates at
+window boundaries after concatenation.
 
 ### Channel reshape in main.nf (step 4)
 This is the most important change. Previously one channel item per chromosome
 fed GenomicsDBImport. Now:
 
   HAPLOTYPE_CALLER emits: [ sample_id, group_id, gvcf, tbi ]
-      ↓ .map + .groupTuple(by: 0) on group_id
+      ↓ .map to groupKey(group_id, n_samples) + .groupTuple(by: 0, sort by name)
   gvcfs_by_group:          [ group_id, [gvcf×N], [tbi×N] ]
       ↓ .join with interval_by_group
   genomicsdb_input:        [ group_id, [gvcf×N], [tbi×N], interval_list ]
@@ -32,14 +35,21 @@ fed GenomicsDBImport. Now:
       ↓ collect + toSortedList
   GATHER_VCFS:             single cohort VCF
 
-The `groupTuple` will block until ALL samples have completed HaplotypeCaller
-for a given group before releasing that group to GenomicsDBImport. This is
-correct behaviour — you want the full cohort in each workspace.
+Because the `groupKey` carries the sample count, `groupTuple` releases each
+group as soon as ALL samples have completed HaplotypeCaller for that group,
+without waiting for the other groups. (A plain `groupTuple` with no size would
+hold every group until the whole HaplotypeCaller stage had finished.) Sorting
+the grouped GVCFs by name keeps the sample map and task hash stable between
+runs, so `-resume` reuses completed GenomicsDBImport tasks.
 
 ### GATHER_VCFS: --naive concat replaces --allow-overlaps
 With non-overlapping primary intervals concatenated in genomic order,
 `bcftools concat --naive` is safe and significantly faster than
-`--allow-overlaps`. The reheader-before-sort logic is preserved.
+`--allow-overlaps`. The concatenated file is already sorted (groups are in
+`.fai` order and each variant is emitted only by the group it starts in), so
+there is no `bcftools sort`; the `##contig` lines are replaced from the `.fai`
+with `bcftools reheader -h`, which copies the compressed records unchanged.
+`bcftools index` fails on any out-of-order record, so it doubles as a check.
 
 ### Resource reduction
 | Process           | Before       | After (base) | Reason                        |
@@ -59,7 +69,7 @@ A single corrupt GenomicsDB workspace now costs ~1/5th of a chromosome:
 
 ## What stays the same
 
-- Reheader-before-sort in GATHER_VCFS
+- `##contig` header lines rebuilt from the `.fai` in GATHER_VCFS
 - JVM heap headroom formula (task.memory.toGiga() - N)
 - -Dsamjdk.use_intel_deflater=false on HAPLOTYPE_CALLER
 - exit -1 retry for Lustre transport failures
