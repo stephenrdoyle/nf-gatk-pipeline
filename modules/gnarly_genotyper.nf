@@ -1,7 +1,6 @@
 process GNARLY_GENOTYPER {
     /*
      * GnarlyGenotyper: faster alternative to GenotypeGVCFs for large cohorts.
-     * Incompatible with --dragen_mode (guard enforced in main.nf).
      *
      * Same inputs and outputs as GENOTYPE_GVCFS (one joint-genotyping piece,
      * "contig:start-end"), so both feed the same genotyped_vcfs channel.

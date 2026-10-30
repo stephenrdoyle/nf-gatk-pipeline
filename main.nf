@@ -54,11 +54,6 @@ if (!(params.genotype_window_size instanceof Number) || params.genotype_window_s
     error "ERROR: --genotype_window_size must be a positive number of bp (got ${params.genotype_window_size})"
 }
 
-// Guard: --use_gnarly and --dragen_mode are incompatible
-if (params.use_gnarly && params.dragen_mode) {
-    error "ERROR: --use_gnarly and --dragen_mode cannot be used together"
-}
-
 // Guard: custom filter mode requires filter expressions
 if (params.filter_mode == 'custom' && (!params.snp_filters || !params.indel_filters)) {
     error "ERROR: --filter_mode custom requires --snp_filters and --indel_filters"

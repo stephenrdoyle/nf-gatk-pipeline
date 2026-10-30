@@ -73,7 +73,6 @@ A single corrupt GenomicsDB workspace now costs ~1/5th of a chromosome:
 - JVM heap headroom formula (task.memory.toGiga() - N)
 - -Dsamjdk.use_intel_deflater=false on HAPLOTYPE_CALLER
 - exit -1 retry for Lustre transport failures
-- --use_gnarly / --dragen_mode incompatibility guard
 - VALIDATE_BAM logic
 
 ## Switching back to per-chromosome (if needed)
