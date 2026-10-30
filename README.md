@@ -114,6 +114,7 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 | `--dragen_mode` | `false` | DRAGEN-GATK calling (see [Modes](#modes)) |
 | `--pooled` | `false` | Samples are pools, not individuals (see [Modes](#modes)) |
 | `--cleanup` | `false` | Empty intermediate work directories at the end (see [Cleanup](#cleanup)) |
+| `--publish_mode` | `link` | How result VCFs are published: `link` (hard link: no extra space, index timestamps stay correct; needs `--outdir` on the same filesystem as `work/`, checked at launch) or `copy` |
 
 ## Variant filtering
 
@@ -176,7 +177,7 @@ results/
 └── pipeline_timeline.html
 ```
 
-Every VCF has a `.tbi` index alongside it. `run_pipeline.sh` writes the Nextflow report and timeline (plus a DAG) to `results/reports/` instead of the top level.
+Every VCF has a `.tbi` index alongside it. Result VCFs are hard links to the files in `work/` (`--publish_mode link`), so they take no extra space. `run_pipeline.sh` writes the Nextflow report and timeline (plus a DAG) to `results/reports/` instead of the top level.
 
 ## Resources, retries and failures
 
