@@ -154,6 +154,31 @@ workflow {
         "command: ${workflow.commandLine}",
     ].join('\n'))
 
+    // --- Publishing: result VCFs are hard-linked by default (publish_mode) ---
+    if (!(params.publish_mode in ['link', 'copy'])) {
+        error "ERROR: --publish_mode must be 'link' or 'copy' (got '${params.publish_mode}')"
+    }
+    if (params.publish_mode == 'link') {
+        // Hard links can't cross filesystems: compare the filesystem of the
+        // nearest existing directory of --outdir with that of the work dir
+        // (null, so the check is skipped, if the filesystem can't be determined)
+        def store_of = { java.nio.file.Path p ->
+            try {
+                p = p.toAbsolutePath()
+                while (p != null && !java.nio.file.Files.exists(p)) p = p.parent
+                return p != null ? java.nio.file.Files.getFileStore(p) : null
+            } catch (Exception e) {
+                return null
+            }
+        }
+        def out_store  = store_of(file(params.outdir))
+        def work_store = store_of(workflow.workDir)
+        if (out_store && work_store && out_store != work_store) {
+            error "ERROR: --outdir ${params.outdir} is on a different filesystem from the work directory " +
+                  "(${workflow.workDir}), so result VCFs can't be hard-linked: use --publish_mode copy"
+        }
+    }
+
     // --- 0. Reference files ---
     reference = file(params.reference, checkIfExists: true)
 

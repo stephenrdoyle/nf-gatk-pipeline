@@ -15,7 +15,7 @@ process GATHER_VCFS {
      */
 
     label 'process_medium'
-    publishDir "${params.outdir}/variants", mode: 'copy'
+    publishDir "${params.outdir}/variants", mode: params.publish_mode   // see publish_mode in nextflow.config
 
     input:
     path vcf_list    // all group_NNNN.genotyped.vcf.gz, name-sorted
