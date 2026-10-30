@@ -112,7 +112,6 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 | `--genotype_gq_threshold` | `20` | Genotypes with `GQ` below this are set to no-call (not in pooled or Gnarly mode) |
 | `--genotype_rgq_threshold` | — | Gnarly mode: genotypes with `RGQ` below this are set to no-call |
 | `--use_gnarly` | `false` | Joint-genotype with GnarlyGenotyper instead of GenotypeGVCFs |
-| `--dragen_mode` | `false` | DRAGEN-GATK calling (see [Modes](#modes)) |
 | `--pooled` | `false` | Samples are pools, not individuals (see [Modes](#modes)) |
 | `--cleanup` | `false` | Empty intermediate work directories at the end (see [Cleanup](#cleanup)) |
 | `--publish_mode` | `link` | How result VCFs are published: `link` (hard link: no extra space, index timestamps stay correct; needs `--outdir` on the same filesystem as `work/`, checked at launch) or `copy` |
@@ -131,7 +130,6 @@ bcftools view -f PASS results/cohort.filtered.vcf.gz
 |---|---|
 | `QD < 2.0`, `MQ < 40.0`, `FS > 60.0`, `SOR > 3.0`, `MQRankSum < -12.5`, `ReadPosRankSum < -8.0` | `QD < 2.0`, `FS > 200.0`, `SOR > 10.0`, `ReadPosRankSum < -20.0` |
 
-With `--dragen_mode`, the single DRAGEN filter `QUAL < 10.4139` replaces both columns.
 
 **`optimised`:** thresholds are derived from your data. For each annotation, the worst `--filter_percentile_lo`% of sites are flagged: the bottom tail for `QD`, `MQ`, `MQRankSum` and `ReadPosRankSum`, and the top tail for `FS` and `SOR`. This flags at least that fraction per annotation by design, so check the HTML report in `filter_reports/` to see where each threshold landed.
 
@@ -139,15 +137,7 @@ With `--dragen_mode`, the single DRAGEN filter `QUAL < 10.4139` replaces both co
 
 ## Modes
 
-**GnarlyGenotyper (`--use_gnarly`):** a faster alternative to GenotypeGVCFs for large cohorts. GQ isn't emitted in this mode, so use `--genotype_rgq_threshold` instead of `--genotype_gq_threshold`. It can't be combined with `--dragen_mode`.
-
-**DRAGEN-GATK (`--dragen_mode`):**
-1. builds an STR table from the reference
-2. calibrates a DRAGstr model for each sample
-3. runs HaplotypeCaller with `--dragen-mode` and that model
-4. in `hard` filter mode, applies DRAGEN's QUAL filter
-
-The QUAL threshold was calibrated on human data, so compare it with the standard hard filters on a subset before relying on it.
+**GnarlyGenotyper (`--use_gnarly`):** a faster alternative to GenotypeGVCFs for large cohorts. GQ isn't emitted in this mode, so use `--genotype_rgq_threshold` instead of `--genotype_gq_threshold`.
 
 **Pooled samples (`--pooled`):** for samples that are pools of individuals.
 - **Genotypes are masked.** Variants are still called as if each sample were diploid, so every `GT` in the final VCF is set to missing. Use `FORMAT/AD`, or the added `FORMAT/AF` (alt reads ÷ total, one value per alt allele), instead.
@@ -230,7 +220,7 @@ After `--cleanup`, `-resume` can't reuse those steps: changing a filter later me
 main.nf               workflow
 nextflow.config       parameters, resources, retries, LSF executor, reports
 run_pipeline.sh       LSF submission script for farm22
-modules/              one process per file (dragstr.nf holds the two DRAGEN calibration steps)
+modules/              one process per file
 bin/                  scripts used by processes (filter thresholds and summary, pool annotation)
 assets/               MultiQC configuration
 samplesheet.csv       example samplesheet
