@@ -12,11 +12,17 @@ process CLEANUP {
      *   - SPLIT_VARIANTS / variant filters   snps/indels VCFs
      *
      * For each target's task directory, everything is deleted except the
-     * .command.* logs and .exitcode, so failures stay debuggable.
+     * .command.* logs, so failures stay debuggable.
      * NOTE: -resume can no longer reuse these tasks — a later rerun (e.g. with
      * different filters) starts again from HaplotypeCaller.
      *
      * Safety:
+     *   - each task directory is invalidated BEFORE anything in it is deleted:
+     *     .exitcode is renamed to .exitcode.cleaned, so Nextflow no longer sees
+     *     the task as completed. If cleanup is interrupted part-way, -resume
+     *     reruns every directory it touched instead of trusting a half-deleted
+     *     one (a partly removed GenomicsDB workspace still exists as a
+     *     directory, so it would otherwise be reused as a valid cached output)
      *   - each staged target is followed ONE link only, to the task directory
      *     that produced it; never through a chain (a passed-through BAM links
      *     to the original), and nothing is deleted unless that directory is
@@ -61,7 +67,7 @@ for name in os.listdir('targets'):
     target = os.path.join(os.path.dirname(link), os.readlink(link))
     task_dirs.add(os.path.realpath(os.path.dirname(target)))
 
-keep = lambda e: e.startswith('.command.') or e == '.exitcode'
+keep = lambda e: e.startswith('.command.') or e.startswith('.exitcode')
 cleaned, skipped = 0, 0
 for d in sorted(task_dirs):
     if os.path.dirname(os.path.dirname(d)) != work_root:
@@ -80,6 +86,11 @@ for d in sorted(task_dirs):
         print(f'SKIP published copy incomplete for {unpublished}: {d}')
         skipped += 1
         continue
+    # Invalidate first: a cleanup interrupted after this point leaves a task
+    # that -resume reruns, never a half-deleted one that looks complete
+    exitcode = os.path.join(d, '.exitcode')
+    if os.path.exists(exitcode):
+        os.rename(exitcode, exitcode + '.cleaned')
     for e in entries:
         p = os.path.join(d, e)
         if os.path.islink(p) or not os.path.isdir(p):
