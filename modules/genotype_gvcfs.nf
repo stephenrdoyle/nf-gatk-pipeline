@@ -19,6 +19,7 @@ process GENOTYPE_GVCFS {
 
     input:
     tuple val(part_id), path(genomicsdb), val(interval)   // interval: "contig:start-end"
+    val  prior_args     // "--heterozygosity X --indel-heterozygosity Y", or '' for GATK's defaults
     path reference
     path reference_fai
     path reference_dict
@@ -37,6 +38,7 @@ process GENOTYPE_GVCFS {
         --output ${part_id}.genotyped.vcf.gz \\
         --intervals ${interval} \\
         --only-output-calls-starting-in-intervals \\
+        ${prior_args} \\
         --genomicsdb-shared-posixfs-optimizations true \\
         --tmp-dir .
     """

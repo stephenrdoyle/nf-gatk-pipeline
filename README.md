@@ -110,6 +110,8 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 | `--snp_filters` / `--indel_filters` | — | Custom mode: comma-separated GATK expressions, e.g. `"QD < 2.0,FS > 60.0"` |
 | `--genotype_dp_threshold` | `5` | Genotypes with `DP` below this are set to no-call |
 | `--genotype_gq_threshold` | `20` | Genotypes with `GQ` below this are set to no-call (not in pooled or Gnarly mode) |
+| `--heterozygosity` | — | GenotypeGVCFs' heterozygosity prior: unset = GATK default (0.001), a number, or `auto` (estimated from the BAMs, see [Modes](#modes)) |
+| `--indel_heterozygosity` | — | Indel prior; unset = `--heterozygosity` × 0.125 |
 | `--genotype_rgq_threshold` | — | Gnarly mode: genotypes with `RGQ` below this are set to no-call |
 | `--use_gnarly` | `false` | Joint-genotype with GnarlyGenotyper instead of GenotypeGVCFs |
 | `--dragen_mode` | `false` | DRAGEN-GATK calling (see [Modes](#modes)) |
@@ -148,6 +150,14 @@ With `--dragen_mode`, the single DRAGEN filter `QUAL < 10.4139` replaces both co
 4. in `hard` filter mode, applies DRAGEN's QUAL filter
 
 The QUAL threshold was calibrated on human data, so compare it with the standard hard filters on a subset before relying on it.
+
+**Estimated heterozygosity prior (`--heterozygosity auto`):** GATK's genotyping prior assumes human-like diversity (0.001). Many species, and crosses such as F2 cohorts, are 10–30× more diverse. With `auto`, the pipeline estimates heterozygosity from the BAMs while HaplotypeCaller runs:
+- **How:** ANGSD per-sample site frequency spectra over a fixed ~20 Mb sample of the genome. There are no variant calls, so no caller prior is involved.
+- **Which samples:** the first 20 samples by `sample_id`. Low-coverage samples are excluded.
+- **The value:** the median, which is passed to GenotypeGVCFs and recorded with the per-sample values in `pipeline_info/heterozygosity_estimate.txt`.
+- **Software:** ANGSD runs from a pinned Biocontainers image via Singularity (`module load ISG/singularity/3.11.4`). Images are cached in `$NXF_SINGULARITY_CACHEDIR`, which `run_pipeline.sh` sets.
+- **Not used** with `--pooled` or `--use_gnarly`.
+- **What reruns:** changing the prior reruns joint genotyping onwards, but not HaplotypeCaller.
 
 **Pooled samples (`--pooled`):** for samples that are pools of individuals.
 - **Genotypes are masked.** Variants are still called as if each sample were diploid, so every `GT` in the final VCF is set to missing. Use `FORMAT/AD`, or the added `FORMAT/AF` (alt reads ÷ total, one value per alt allele), instead.
