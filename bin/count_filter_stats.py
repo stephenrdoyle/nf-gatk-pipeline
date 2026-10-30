@@ -5,7 +5,7 @@ Summarise site filtering from the filtered SNP and indel VCFs.
 Counts come from each VCF's FILTER column, and each filter's expression from
 its ##FILTER header line (VariantFiltration writes the expression as the
 description), so the summary is the same whichever filter mode produced the
-VCF: hard, optimised, custom or DRAGEN.
+VCF: hard, optimised or custom.
 
 Output (stdout, TSV), one row per variant type and filter:
   id            unique row key (MultiQC tables are keyed on the first column)

@@ -61,11 +61,6 @@ if (params.heterozygosity != null && params.heterozygosity != 'auto' &&
     error "ERROR: --heterozygosity must be 'auto' or a number between 0 and 1 (got ${params.heterozygosity})"
 }
 
-// Guard: --use_gnarly and --dragen_mode are incompatible
-if (params.use_gnarly && params.dragen_mode) {
-    error "ERROR: --use_gnarly and --dragen_mode cannot be used together"
-}
-
 // Guard: custom filter mode requires filter expressions
 if (params.filter_mode == 'custom' && (!params.snp_filters || !params.indel_filters)) {
     error "ERROR: --filter_mode custom requires --snp_filters and --indel_filters"
