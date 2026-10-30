@@ -316,7 +316,7 @@ workflow {
     SAMPLE_MISSINGNESS_RAW(cohort_vcf, BCFTOOLS_STATS_RAW.out.stats, 'before_filter', false)
 
     // --- 9. Per-genotype filter (DP / GQ / RGQ) ---
-    GENOTYPE_FILTER(cohort_vcf, reference, reference_fai, reference_dict)
+    GENOTYPE_FILTER(cohort_vcf)
     geno_filtered_vcf = GENOTYPE_FILTER.out.filtered_vcf
 
     // --- 10. Split into SNPs and INDELs ---
