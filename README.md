@@ -104,6 +104,7 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 | `--window_size` | `10000000` | HaplotypeCaller window size in bp. Larger than the longest contig = one window per contig |
 | `--genotype_window_size` | `2000000` | GenomicsDBImport/GenotypeGVCFs piece size in bp, within each window. ≥ `--window_size` = one piece per window. Can be changed without rerunning HaplotypeCaller |
 | `--genomicsdb_consolidate` | `true` | Merge GenomicsDB's per-batch fragments after import, so GenotypeGVCFs reads one |
+| `--genomicsdb_max_forks` | `50` | Most GenomicsDBImport jobs running at once; each reads every sample's GVCF from Lustre, so this limits the I/O burst |
 | `--filter_mode` | `hard` | `hard`, `optimised` or `custom` (see [Variant filtering](#variant-filtering)) |
 | `--filter_percentile_lo` | `5` | Optimised mode: percentile cut-off |
 | `--snp_filters` / `--indel_filters` | — | Custom mode: comma-separated GATK expressions, e.g. `"QD < 2.0,FS > 60.0"` |
