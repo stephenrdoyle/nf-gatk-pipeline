@@ -16,7 +16,8 @@ process SITE_FILTER {
      *      match the decisions, record for record by count, or the task fails
      *
      * Rules: --filter_mode hard (GATK's thresholds) or custom (--snp_filters,
-     * --indel_filters); optional --max_depth, --max_missing, --excess_het.
+     * --indel_filters); --max_depth (default 2x the median site depth); optional
+     * --max_missing, --excess_het.
      * Sites are flagged, never removed.
      */
     tag "site_filter"

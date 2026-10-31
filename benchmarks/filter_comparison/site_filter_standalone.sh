@@ -9,8 +9,9 @@
 #        -J site_filter -o site_filter_%J.out -e site_filter_%J.err \
 #        bash site_filter_standalone.sh <cohort.genotype_filtered.vcf.gz> <outdir> [site_filter.py options]
 #
-# Options are passed to site_filter.py apply, e.g. --max-depth 2x --max-missing 0.2
-# --excess-het true; default is hard mode with nothing optional applied.
+# Options are passed to site_filter.py apply, e.g. --max-missing 0.2 --excess-het true.
+# Defaults match the pipeline: hard mode and --max-depth 2x (--max-depth false
+# turns the depth ceiling off).
 set -euo pipefail
 
 vcf=$(readlink -f "$1")
@@ -35,7 +36,10 @@ if [ ! -s sites.tsv.gz ]; then
     mv sites.tsv.gz.tmp sites.tsv.gz
 fi
 
-python3 "$bin/site_filter.py" apply --sites sites.tsv.gz --columns "$tags" --contigs contigs.txt --mode hard "$@" \
+depth_default=(--max-depth 2x)
+for a in "$@"; do [ "$a" = --max-depth ] && depth_default=(); done
+python3 "$bin/site_filter.py" apply --sites sites.tsv.gz --columns "$tags" --contigs contigs.txt --mode hard \
+    ${depth_default[@]+"${depth_default[@]}"} "$@" \
     | bcftools view -Oz -o decisions.vcf.gz
 bcftools index -f --tbi decisions.vcf.gz
 
