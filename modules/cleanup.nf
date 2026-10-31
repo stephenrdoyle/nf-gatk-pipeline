@@ -9,7 +9,6 @@ process CLEANUP {
      *   - GENOTYPE_GVCFS/GNARLY   per-window genotyped VCFs
      *   - GATHER_VCFS             cohort.genotyped.vcf.gz (published copy kept)
      *   - GENOTYPE_FILTER         cohort.genotype_filtered.vcf.gz (published copy kept)
-     *   - SPLIT_VARIANTS / variant filters   snps/indels VCFs
      *
      * For each target's task directory, everything is deleted except the
      * .command.* logs, so failures stay debuggable.
