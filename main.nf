@@ -9,7 +9,7 @@
  *   - GenomicsDBImport runs per-interval (all samples, primary interval)
  *   - GenotypeGVCFs runs per-interval
  *   - GatherVcfs concatenates all intervals into final cohort VCF
- *   - Post-calling: genotype filter -> split -> variant filter -> merge -> QC
+ *   - Post-calling: genotype filter -> site filter -> QC
  */
 
 nextflow.enable.dsl = 2
@@ -24,16 +24,11 @@ include { GENOTYPE_GVCFS      } from './modules/genotype_gvcfs'
 include { GNARLY_GENOTYPER    } from './modules/gnarly_genotyper'
 include { GATHER_VCFS         } from './modules/gather_vcfs'
 include { GENOTYPE_FILTER     } from './modules/genotype_filter'
-include { SPLIT_VARIANTS      } from './modules/split_variants'
-include { HARD_FILTER         } from './modules/hard_filter'
-include { OPTIMISED_FILTER    } from './modules/optimised_filter'
-include { CUSTOM_FILTER       } from './modules/custom_filter'
-include { MERGE_FILTERED      } from './modules/merge_filtered'
+include { SITE_FILTER         } from './modules/site_filter'
 include { BCFTOOLS_STATS as BCFTOOLS_STATS_RAW      } from './modules/bcftools_stats'
 include { BCFTOOLS_STATS as BCFTOOLS_STATS_FILTERED } from './modules/bcftools_stats'
 include { SAMPLE_MISSINGNESS as SAMPLE_MISSINGNESS_RAW      } from './modules/sample_missingness'
 include { SAMPLE_MISSINGNESS as SAMPLE_MISSINGNESS_FILTERED } from './modules/sample_missingness'
-include { FILTER_SUMMARY      } from './modules/filter_summary'
 include { MULTIQC             } from './modules/multiqc'
 include { CLEANUP             } from './modules/cleanup'
 include { POOL_ANNOTATE       } from './modules/pool_annotate'
@@ -61,9 +56,36 @@ if (params.heterozygosity != null && params.heterozygosity != 'auto' &&
     error "ERROR: --heterozygosity must be 'auto' or a number between 0 and 1 (got ${params.heterozygosity})"
 }
 
-// Guard: custom filter mode requires filter expressions
-if (params.filter_mode == 'custom' && (!params.snp_filters || !params.indel_filters)) {
-    error "ERROR: --filter_mode custom requires --snp_filters and --indel_filters"
+// Guard: site filters (see modules/site_filter.nf)
+if (params.filter_mode == 'optimised') {
+    error "ERROR: --filter_mode optimised has been removed: its percentile thresholds flagged a fixed share of " +
+          "sites whatever the data, and on the F2 cohort were no better than GATK's (Ts/Tv 2.00 vs 1.98) while " +
+          "losing 2.3 M more SNPs. Use the default (hard), and check filter_reports/filter_diagnostics.html; " +
+          "tune with --filter_mode custom if a threshold doesn't suit the cohort."
+}
+if (!(params.filter_mode in ['hard', 'custom'])) {
+    error "ERROR: --filter_mode must be 'hard' or 'custom' (got '${params.filter_mode}')"
+}
+if (params.filter_mode == 'custom') {
+    if (!params.snp_filters || !params.indel_filters) {
+        error "ERROR: --filter_mode custom requires --snp_filters and --indel_filters"
+    }
+    // same grammar as bin/site_filter.py: '<INFO tag> <op> <number>', comma-separated
+    def bad = "${params.snp_filters},${params.indel_filters}".tokenize(',')*.trim().findAll { e ->
+        e && !(e ==~ /(?:INFO\/)?[A-Za-z_][A-Za-z0-9_.]*\s*(<=|>=|==|!=|<|>)\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?/)
+    }
+    if (bad) error "ERROR: can't parse filter expression(s) ${bad.join('; ')}: expected '<INFO tag> <op> <number>', e.g. 'QD < 2.0'"
+}
+if (params.max_depth != null && params.max_depth != false &&
+        !(params.max_depth.toString() ==~ /\d+(\.\d+)?x?/)) {
+    error "ERROR: --max_depth must be a multiple of the median site depth (e.g. 2x) or a number (got ${params.max_depth})"
+}
+if (params.max_missing != null && params.max_missing != false &&
+        !(params.max_missing instanceof Number && params.max_missing >= 0 && params.max_missing < 1)) {
+    error "ERROR: --max_missing must be a fraction from 0 to 1 (got ${params.max_missing})"
+}
+if (!(params.excess_het in [true, false, null] || (params.excess_het instanceof Number && params.excess_het > 0))) {
+    error "ERROR: --excess_het must be true (GATK's 54.69), a number, or false (got ${params.excess_het})"
 }
 
 // ---------------------------------------------------------------------------
@@ -367,43 +389,12 @@ workflow {
     GENOTYPE_FILTER(cohort_vcf)
     geno_filtered_vcf = GENOTYPE_FILTER.out.filtered_vcf
 
-    // --- 10. Split into SNPs and INDELs ---
-    SPLIT_VARIANTS(geno_filtered_vcf, reference, reference_fai, reference_dict)
-    // Emits: snps [ vcf, tbi ] and indels [ vcf, tbi ]
+    // --- 10. Site filters (hard or custom, plus optional depth, missingness
+    //     and ExcessHet), one pass; also the filter summary and diagnostics ---
+    SITE_FILTER(geno_filtered_vcf)
+    merged_vcf = SITE_FILTER.out.filtered_vcf
 
-    // Tag with variant type for downstream channel handling
-    snps_ch   = SPLIT_VARIANTS.out.snps.map   { vcf, tbi -> [ 'snps',   vcf, tbi ] }
-    indels_ch = SPLIT_VARIANTS.out.indels.map { vcf, tbi -> [ 'indels', vcf, tbi ] }
-    split_ch  = snps_ch.mix(indels_ch)
-
-    // --- 11. Variant-level filter (hard / optimised / custom) ---
-    if (params.filter_mode == 'optimised') {
-        OPTIMISED_FILTER(split_ch, reference, reference_fai, reference_dict)
-        filtered_ch = OPTIMISED_FILTER.out.filtered_vcf
-    } else if (params.filter_mode == 'custom') {
-        CUSTOM_FILTER(split_ch, reference, reference_fai, reference_dict)
-        filtered_ch   = CUSTOM_FILTER.out.filtered_vcf
-    } else {
-        // default: hard filter
-        HARD_FILTER(split_ch, reference, reference_fai, reference_dict)
-        filtered_ch   = HARD_FILTER.out.filtered_vcf
-    }
-
-    // Separate filtered SNP and INDEL channels for merging
-    filt_snps_ch   = filtered_ch.filter { it[0] == 'snps'   }.map { vtype, vcf, tbi -> [ vcf, tbi ] }
-    filt_indels_ch = filtered_ch.filter { it[0] == 'indels' }.map { vtype, vcf, tbi -> [ vcf, tbi ] }
-
-    // --- 12. Merge filtered SNPs + INDELs ---
-    MERGE_FILTERED(
-        filt_snps_ch,
-        filt_indels_ch,
-        reference,
-        reference_fai,
-        reference_dict
-    )
-    merged_vcf = MERGE_FILTERED.out.filtered_vcf
-
-    // --- 13. Pool annotation (pooled mode only) ---
+    // --- 11. Pool annotation (pooled mode only) ---
     if (params.pooled) {
         POOL_ANNOTATE(merged_vcf)
         final_vcf = POOL_ANNOTATE.out.annotated_vcf
@@ -411,7 +402,7 @@ workflow {
         final_vcf = merged_vcf
     }
 
-    // --- 14. Stats + per-sample missingness on the filtered VCF, PASS sites ---
+    // --- 12. Stats + per-sample missingness on the filtered VCF, PASS sites ---
     // Filters only flag sites, so without restricting to PASS these would
     // count failed sites too. Run on merged_vcf, before pool annotation: in
     // pooled mode every GT is then masked, which would report every sample
@@ -419,19 +410,16 @@ workflow {
     BCFTOOLS_STATS_FILTERED(merged_vcf, 'after_filter', true)
     SAMPLE_MISSINGNESS_FILTERED(merged_vcf, BCFTOOLS_STATS_FILTERED.out.stats, 'after_filter', true)
 
-    // --- 15. Filter summary: sites per filter, from the filtered VCFs ---
-    FILTER_SUMMARY(filt_snps_ch, filt_indels_ch)
-
-    // --- 16. MultiQC ---
+    // --- 13. MultiQC ---
     multiqc_files = BCFTOOLS_STATS_RAW.out.stats
         .mix(BCFTOOLS_STATS_FILTERED.out.stats)
         .mix(SAMPLE_MISSINGNESS_RAW.out.missingness)
         .mix(SAMPLE_MISSINGNESS_FILTERED.out.missingness)
-        .mix(FILTER_SUMMARY.out.summary)
+        .mix(SITE_FILTER.out.summary)
         .collect()
     MULTIQC(multiqc_files)
 
-    // --- 17. Cleanup intermediate work directories (opt-in) ---
+    // --- 14. Cleanup intermediate work directories (opt-in) ---
     // One output per task is enough: CLEANUP empties the task directory
     // that produced it. Validated BAMs are deliberately not included.
     if (params.cleanup) {
@@ -441,11 +429,7 @@ workflow {
                 GENOMICS_DB_IMPORT.out.genomicsdb.map { group_id, db, interval_list -> db },
                 genotyped_vcfs.map                    { group_id, vcf, tbi -> vcf },
                 cohort_vcf.map                        { vcf, tbi -> vcf },
-                GENOTYPE_FILTER.out.filtered_vcf.map  { vcf, tbi -> vcf },
-                SPLIT_VARIANTS.out.snps.map           { vcf, tbi -> vcf },
-                SPLIT_VARIANTS.out.indels.map         { vcf, tbi -> vcf },
-                filt_snps_ch.map                      { vcf, tbi -> vcf },
-                filt_indels_ch.map                    { vcf, tbi -> vcf }
+                GENOTYPE_FILTER.out.filtered_vcf.map  { vcf, tbi -> vcf }
             )
             .collect()
 

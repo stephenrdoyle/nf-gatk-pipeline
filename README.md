@@ -13,10 +13,11 @@ reference FASTA ──► .fai / .dict        (per sample × window,       (per 
                                                                                                   │
    ┌──────────────────────────────────────────────────────────────────────────────────────────────┘
    ▼
-GATHER_VCFS ──► GENOTYPE_FILTER ──► SPLIT_VARIANTS ──► SNP / indel filters ──► MERGE_FILTERED ──► [POOL_ANNOTATE]
-(cohort VCF)    (per-genotype       (SNPs; indels       (hard / optimised /     (filtered cohort    (--pooled only)
-                 DP / GQ)            + mixed sites)      custom)                  VCF)
-                                                                                     │
+GATHER_VCFS ──► GENOTYPE_FILTER ──► SITE_FILTER ──────────────────► [POOL_ANNOTATE]
+(cohort VCF)    (per-genotype       (hard / custom; SNP and           (--pooled only)
+                 DP / GQ)            indel rules; filtered cohort VCF,
+                                     summary, diagnostics)
+                                          │
                                           bcftools stats, missingness, filter summary ──► MultiQC
 ```
 
@@ -29,9 +30,8 @@ Each step in more detail:
 5. **`GENOTYPE_GVCFS`** joint-genotypes each piece. Each variant is emitted only by the piece it starts in, so there are no duplicates at piece edges.
 6. **`GATHER_VCFS`** concatenates the pieces, in reference order, into `cohort.genotyped.vcf.gz`.
 7. **`GENOTYPE_FILTER`** sets individual genotypes with low DP or GQ to no-call (`./.`).
-8. **`SPLIT_VARIANTS`** separates SNPs from indels. Mixed sites (SNP and indel alleles at one position) go with the indels.
-9. **The SNP and indel filters** flag failing sites in the `FILTER` column; nothing is removed. **`MERGE_FILTERED`** recombines them into `cohort.filtered.vcf.gz`.
-10. **QC:** bcftools stats and per-sample missingness before filtering (all sites) and after (PASS sites only, since filters only flag sites), plus a per-filter summary, collected into a MultiQC report.
+8. **`SITE_FILTER`** flags failing sites in the `FILTER` column of `cohort.filtered.vcf.gz`, in one bcftools pass; nothing is removed. SNP rules apply to SNPs, indel rules to indels and mixed sites (SNP and indel alleles at one position). It also writes the filter summary and a diagnostics page (see [Variant filtering](#variant-filtering)).
+9. **QC:** bcftools stats and per-sample missingness before filtering (all sites) and after (PASS sites only, since filters only flag sites), plus a per-filter summary, collected into a MultiQC report.
 
 ## Requirements
 
@@ -105,9 +105,11 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 | `--genotype_window_size` | `2000000` | GenomicsDBImport/GenotypeGVCFs piece size in bp, within each window. ≥ `--window_size` = one piece per window. Can be changed without rerunning HaplotypeCaller |
 | `--genomicsdb_consolidate` | `true` | Merge GenomicsDB's per-batch fragments after import, so GenotypeGVCFs reads one |
 | `--genomicsdb_max_forks` | `50` | Most GenomicsDBImport jobs running at once; each reads every sample's GVCF from Lustre, so this limits the I/O burst |
-| `--filter_mode` | `hard` | `hard`, `optimised` or `custom` (see [Variant filtering](#variant-filtering)) |
-| `--filter_percentile_lo` | `5` | Optimised mode: percentile cut-off |
-| `--snp_filters` / `--indel_filters` | — | Custom mode: comma-separated GATK expressions, e.g. `"QD < 2.0,FS > 60.0"` |
+| `--filter_mode` | `hard` | `hard` (GATK's thresholds) or `custom` (see [Variant filtering](#variant-filtering)) |
+| `--snp_filters` / `--indel_filters` | — | Custom mode: comma-separated `<INFO tag> <op> <number>` expressions, e.g. `"QD < 2.0,FS > 60.0"` |
+| `--max_depth` | — | Flag sites with INFO/DP above this: a multiple of the median site depth (`2x`) or a number. Off unless set |
+| `--max_missing` | — | Flag sites where more than this fraction of samples has no call after the genotype filter, e.g. `0.2`. Off unless set |
+| `--excess_het` | `false` | Flag sites with too many heterozygotes: `true` (ExcessHet > 54.69) or a number. Not for F1 crosses |
 | `--genotype_dp_threshold` | `5` | Genotypes with `DP` below this are set to no-call |
 | `--genotype_gq_threshold` | `20` | Genotypes with `GQ` below this are set to no-call (not in pooled or Gnarly mode) |
 | `--heterozygosity` | — | GenotypeGVCFs' heterozygosity prior: unset = GATK default (0.001), a number, or `auto` (estimated from the BAMs, see [Modes](#modes)) |
@@ -134,9 +136,21 @@ bcftools view -f PASS results/cohort.filtered.vcf.gz
 | `QD < 2.0`, `MQ < 40.0`, `FS > 60.0`, `SOR > 3.0`, `MQRankSum < -12.5`, `ReadPosRankSum < -8.0` | `QD < 2.0`, `FS > 200.0`, `SOR > 10.0`, `ReadPosRankSum < -20.0` |
 
 
-**`optimised`:** thresholds are derived from your data. For each annotation, the worst `--filter_percentile_lo`% of sites are flagged: the bottom tail for `QD`, `MQ`, `MQRankSum` and `ReadPosRankSum`, and the top tail for `FS` and `SOR`. This flags at least that fraction per annotation by design, so check the HTML report in `filter_reports/` to see where each threshold landed.
+A site missing an annotation passes that filter, as in GATK.
 
-**`custom`:** your own expressions, via `--snp_filters` and `--indel_filters`. Both are required in this mode.
+**`custom`:** your own thresholds, via `--snp_filters` and `--indel_filters` (both required). Each is a comma-separated list of `<INFO tag> <op> <number>`, with `<`, `<=`, `>`, `>=`, `==` or `!=`, e.g. `--snp_filters "QD < 2.0,MQ < 40.0,FS > 60.0"`. Filter names are built from the expression (`SNP_QD_lt_2.0`).
+
+**Optional site filters**, in either mode, all off by default:
+
+| Option | Flags | Catches | Caution |
+|---|---|---|---|
+| `--max_depth 2x` | `HighDepth`: INFO/DP above 2 × the median site depth (SNPs and indels separately), or a fixed number | Collapsed repeats and paralogs | Depth varies along some genomes; check the DP histogram first |
+| `--max_missing 0.2` | `HighMissing`: more than 20% of samples uncalled after the genotype filter | Sites genotyped in too few samples | How much to allow depends on the analysis. On the F2 cohort 0.2 flagged 30% of SNPs, so check per-sample missingness first: a few poor samples make every site look incomplete |
+| `--excess_het` | `ExcessHet`: GATK's ExcessHet above 54.69 | Paralogs (nearly every sample heterozygous) | **Never for F1 crosses**: every site that differs between the parents is heterozygous in all offspring |
+
+**Checking the thresholds suit your cohort.** The thresholds are fixed, so the same PASS definition holds across studies. `filter_reports/filter_diagnostics.html` shows whether they fit each cohort. For every annotation it shows a histogram with the thresholds marked, the share of sites flagged, and the sites flagged by that filter alone. It also shows depth, missingness and ExcessHet at several levels whether or not they are applied, so you can see what each option would do before turning it on. A warning appears when one filter flags more than 10% of sites. If a threshold sits inside the bulk of a distribution, tune it with `custom`.
+
+**Why there is no `optimised` mode any more.** It set each threshold at the worst 5% of the cohort's own values. On the 200-sample F2 cohort that flagged 21% of SNPs. It flagged mostly real sites (Ts/Tv of the removed sites 1.6–2.1, against 2.00 for PASS), and on QD and SOR it was looser than GATK's thresholds. GATK's thresholds kept 2.3 M more SNPs at essentially the same Ts/Tv (1.98). The comparison script is in `benchmarks/filter_comparison/` to repeat this on another cohort.
 
 ## Modes
 
@@ -168,7 +182,7 @@ results/
 ├── cohort.pooled_annotated.vcf.gz         --pooled only: GT masked, FORMAT/AF added
 ├── filter_reports/
 │   ├── filter_summary.tsv                 sites per filter: all, PASS, each filter, "only this filter"
-│   └── {snps,indels}_filter_report.html   optimised mode: thresholds and histograms
+│   └── filter_diagnostics.{html,tsv}      each threshold against this cohort's distributions
 ├── bcftools_stats/                        before_filter (all sites) / after_filter (PASS sites)
 ├── missingness/                           per-sample missing and low-DP genotypes:
 │                                          before_filter (all sites) / after_filter (PASS sites)
