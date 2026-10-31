@@ -194,6 +194,12 @@ def apply(a) -> None:
     if excess_het is not None:
         defs["ExcessHet"] = f"ExcessHet > {excess_het:g}"
 
+    # every check the diagnostics report, applied or not; flagged counts are
+    # taken in pass 2 from the raw values (the pass-1 distributions are
+    # rounded for the histograms, which would miscount values at a threshold)
+    checks = {t: build_checks(t, rules, dist, dp_median, depth, max_missing, excess_het) for t in rules}
+    flagged = {t: [0] * len(checks[t]) for t in rules}
+
     # pass 2: decide, write the decisions VCF, tally
     combos = {t: Counter() for t in rules}
     out = sys.stdout
@@ -224,6 +230,10 @@ def apply(a) -> None:
             v = num(f[idx["ExcessHet"]]) if "ExcessHet" in idx else None
             if v is not None and v > excess_het:
                 failed.append("ExcessHet")
+        for i, (ann, op, val, *_rest) in enumerate(checks[t]):
+            v = num(f[idx[ann]]) if ann in idx else None
+            if v is not None and OPS[op](v, val):
+                flagged[t][i] += 1
         value = ";".join(failed) if failed else "PASS"
         combos[t][value] += 1
         out.write(f"{f[0]}\t{f[1]}\t.\t{f[2]}\t{f[3]}\t.\t{value}\t.\n")
@@ -236,7 +246,7 @@ def apply(a) -> None:
             total.update(c)
         for value, n in sorted(total.items()):
             fh.write(f"{value}\t{n}\n")
-    diag = diagnostics(rules, dist, n_type, combos, dp_median, depth, depth_max, max_missing, excess_het)
+    diag = diagnostics(checks, flagged, dist, n_type, combos)
     write_diag_tsv(a.diag_tsv, diag)
     with open(a.diag_html, "w") as fh:
         fh.write(diag_html(diag, rules, dist, dp_median, depth, depth_max, max_missing, excess_het, a.mode))
@@ -276,12 +286,33 @@ def write_summary(path, combos, defs):
 
 
 # ── diagnostics ──────────────────────────────────────────────────────────────
-def flagged_by(counts: Counter, op: str, val: float) -> int:
-    return sum(n for v, n in counts.items() if OPS[op](v, val))
+def build_checks(t, rules, dist, dp_median, depth, max_missing, excess_het):
+    """(annotation, op, value, filter name or None, applied, label) for every
+    row of the diagnostics: the applied rules, and depth / missingness /
+    ExcessHet at several levels whether applied or not."""
+    checks = [(ann, op, val, name, True, "") for ann, op, val, name in rules[t]]
+    if "DP" in dist[t] and dp_median[t]:
+        for k in DEPTH_MULTIPLES:
+            applied = bool(depth and depth[0] == "x" and abs(depth[1] - k) < 1e-9)
+            checks.append(("DP", ">", k * dp_median[t], "HighDepth" if applied else None, applied, f"{k:g}x median"))
+        if depth and depth[0] == "x" and not any(abs(depth[1] - k) < 1e-9 for k in DEPTH_MULTIPLES):
+            checks.append(("DP", ">", depth[1] * dp_median[t], "HighDepth", True, f"{depth[1]:g}x median"))
+        if depth and depth[0] == "abs":
+            checks.append(("DP", ">", depth[1], "HighDepth", True, ""))
+    for lvl in MISSING_LEVELS:
+        applied = max_missing is not None and abs(max_missing - lvl) < 1e-9
+        checks.append(("F_MISSING", ">", lvl, "HighMissing" if applied else None, applied, ""))
+    if max_missing is not None and not any(abs(max_missing - lvl) < 1e-9 for lvl in MISSING_LEVELS):
+        checks.append(("F_MISSING", ">", max_missing, "HighMissing", True, ""))
+    if "ExcessHet" in dist[t]:
+        eh = excess_het if excess_het is not None else EXCESS_HET_DEFAULT
+        checks.append(("ExcessHet", ">", eh, "ExcessHet" if excess_het is not None else None, excess_het is not None, ""))
+    return checks
 
 
-def diagnostics(rules, dist, n_type, combos, dp_median, depth, depth_max, max_missing, excess_het):
-    """One row per (type, check): what it flags and whether that looks off."""
+def diagnostics(checks, flagged, dist, n_type, combos):
+    """One row per (type, check): what it flags (exact counts from pass 2)
+    and whether that looks off."""
     rows = []
     for t in ("snp", "indel"):
         total = n_type[t]
@@ -291,27 +322,8 @@ def diagnostics(rules, dist, n_type, combos, dp_median, depth, depth_max, max_mi
         for value, n in combos[t].items():
             if value != "PASS" and ";" not in value:
                 only[value] += n
-        checks = [(ann, op, val, name, True) for ann, op, val, name in rules[t]]
-        if "DP" in dist[t] and dp_median[t]:
-            for k in DEPTH_MULTIPLES:
-                applied = bool(depth and depth[0] == "x" and abs(depth[1] - k) < 1e-9)
-                checks.append(("DP", ">", k * dp_median[t], "HighDepth" if applied else None, applied, f"{k:g}x median"))
-            if depth and depth[0] == "abs":
-                checks.append(("DP", ">", depth[1], "HighDepth", True))
-        for lvl in MISSING_LEVELS:
-            applied = max_missing is not None and abs(max_missing - lvl) < 1e-9
-            checks.append(("F_MISSING", ">", lvl, "HighMissing" if applied else None, applied))
-        if max_missing is not None and max_missing not in MISSING_LEVELS:
-            checks.append(("F_MISSING", ">", max_missing, "HighMissing", True))
-        if "ExcessHet" in dist[t]:
-            eh = excess_het if excess_het is not None else EXCESS_HET_DEFAULT
-            checks.append(("ExcessHet", ">", eh, "ExcessHet" if excess_het is not None else None, excess_het is not None))
-        for c in checks:
-            ann, op, val, name, applied = c[:5]
-            label = c[5] if len(c) > 5 else ""
+        for (ann, op, val, name, applied, label), n_flag in zip(checks[t], flagged[t]):
             counts = dist[t].get(ann, Counter())
-            n_val = sum(counts.values())
-            n_flag = flagged_by(counts, op, val)
             pct = 100 * n_flag / total
             warn = ""
             if applied and pct > WARN_PCT:
@@ -320,7 +332,7 @@ def diagnostics(rules, dist, n_type, combos, dp_median, depth, depth_max, max_mi
             rows.append({
                 "variant_type": TYPE_NAMES[t], "annotation": ann, "rule": f"{ann} {op} {val:g}" + (f" ({label})" if label else ""),
                 "applied": "yes" if applied else "no", "filter": name or "", "n_sites": total,
-                "n_with_value": n_val, "n_flagged": n_flag, "pct_flagged": round(pct, 2),
+                "n_with_value": sum(counts.values()), "n_flagged": n_flag, "pct_flagged": round(pct, 2),
                 "n_only": only.get(name, 0) if applied and name else "",
                 "p01": quantile(counts, .01), "p05": quantile(counts, .05), "p50": quantile(counts, .5),
                 "p95": quantile(counts, .95), "p99": quantile(counts, .99), "warning": warn,

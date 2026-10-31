@@ -157,6 +157,16 @@ class SiteFilterTest(unittest.TestCase):
         self.assertNotIn("<script", r.html)
         self.assertIn("QD &lt; 2", r.html)
 
+    def test_diagnostics_counts_are_exact(self):
+        """ExcessHet 54.694 rounds to 54.69 for the histogram but is > 54.69:
+        the diagnostics must count it, as the filter does."""
+        r = Run(self.tmp, [site(1, ExcessHet=54.694), site(2, ExcessHet=54.69), site(3)], excess_het="true")
+        self.assertEqual(r.filters[1], "ExcessHet")
+        self.assertEqual(r.filters[2], "PASS")
+        eh = next(d for d in r.diag if d["variant_type"] == "SNPs" and d["annotation"] == "ExcessHet")
+        self.assertEqual(eh["n_flagged"], "1")
+        self.assertEqual(eh["n_only"], "1")
+
     def test_verify(self):
         r = Run(self.tmp, [site(1), site(2, QD=1, FS=70)])
         good = os.path.join(self.tmp, "observed_good.txt")
