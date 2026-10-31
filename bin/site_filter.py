@@ -154,7 +154,6 @@ def apply(a) -> None:
             if ann not in idx:
                 sys.exit(f"ERROR: annotation {ann} is not in --columns ({a.columns})")
     depth = parse_depth(a.max_depth)
-    max_missing = float(a.max_missing) if a.max_missing not in (None, "", "null", "false") else None
     excess_het = None
     if a.excess_het not in (None, "", "false", "null"):
         excess_het = EXCESS_HET_DEFAULT if a.excess_het == "true" else float(a.excess_het)
@@ -189,15 +188,13 @@ def apply(a) -> None:
         desc = (f"INFO/DP > {depth[1]:g} x median site depth (SNPs {fmt_n(depth_max.get('snp'))}, "
                 f"indels {fmt_n(depth_max.get('indel'))})" if depth[0] == "x" else f"INFO/DP > {depth[1]:g}")
         defs["HighDepth"] = desc
-    if max_missing is not None:
-        defs["HighMissing"] = f"fraction of samples with no genotype call > {max_missing:g}"
     if excess_het is not None:
         defs["ExcessHet"] = f"ExcessHet > {excess_het:g}"
 
     # every check the diagnostics report, applied or not; flagged counts are
     # taken in pass 2 from the raw values (the pass-1 distributions are
     # rounded for the histograms, which would miscount values at a threshold)
-    checks = {t: build_checks(t, rules, dist, dp_median, depth, max_missing, excess_het) for t in rules}
+    checks = {t: build_checks(t, rules, dist, dp_median, depth, excess_het) for t in rules}
     flagged = {t: [0] * len(checks[t]) for t in rules}
 
     # pass 2: decide, write the decisions VCF, tally
@@ -222,10 +219,6 @@ def apply(a) -> None:
             v = num(f[idx["DP"]])
             if v is not None and v > depth_max[t]:
                 failed.append("HighDepth")
-        if max_missing is not None:
-            v = num(f[idx["F_MISSING"]])
-            if v is not None and v > max_missing:
-                failed.append("HighMissing")
         if excess_het is not None:
             v = num(f[idx["ExcessHet"]]) if "ExcessHet" in idx else None
             if v is not None and v > excess_het:
@@ -249,7 +242,7 @@ def apply(a) -> None:
     diag = diagnostics(checks, flagged, dist, n_type, combos)
     write_diag_tsv(a.diag_tsv, diag)
     with open(a.diag_html, "w") as fh:
-        fh.write(diag_html(diag, rules, dist, dp_median, depth, depth_max, max_missing, excess_het, a.mode))
+        fh.write(diag_html(diag, rules, dist, dp_median, depth, depth_max, excess_het, a.mode))
     print(f"site filter: {sum(n_type.values()):,} records; PASS "
           f"{sum(c.get('PASS', 0) for c in combos.values()):,}", file=sys.stderr)
 
@@ -286,7 +279,7 @@ def write_summary(path, combos, defs):
 
 
 # ── diagnostics ──────────────────────────────────────────────────────────────
-def build_checks(t, rules, dist, dp_median, depth, max_missing, excess_het):
+def build_checks(t, rules, dist, dp_median, depth, excess_het):
     """(annotation, op, value, filter name or None, applied, label) for every
     row of the diagnostics: the applied rules, and depth / missingness /
     ExcessHet at several levels whether applied or not."""
@@ -299,11 +292,10 @@ def build_checks(t, rules, dist, dp_median, depth, max_missing, excess_het):
             checks.append(("DP", ">", depth[1] * dp_median[t], "HighDepth", True, f"{depth[1]:g}x median"))
         if depth and depth[0] == "abs":
             checks.append(("DP", ">", depth[1], "HighDepth", True, ""))
+    # missingness is reported, never filtered on: how much to allow depends on
+    # the analysis, so each analysis sets its own cut-off downstream
     for lvl in MISSING_LEVELS:
-        applied = max_missing is not None and abs(max_missing - lvl) < 1e-9
-        checks.append(("F_MISSING", ">", lvl, "HighMissing" if applied else None, applied, ""))
-    if max_missing is not None and not any(abs(max_missing - lvl) < 1e-9 for lvl in MISSING_LEVELS):
-        checks.append(("F_MISSING", ">", max_missing, "HighMissing", True, ""))
+        checks.append(("F_MISSING", ">", lvl, None, False, "reported only"))
     if "ExcessHet" in dist[t]:
         eh = excess_het if excess_het is not None else EXCESS_HET_DEFAULT
         checks.append(("ExcessHet", ">", eh, "ExcessHet" if excess_het is not None else None, excess_het is not None, ""))
@@ -384,7 +376,7 @@ def svg_hist(counts: Counter, marks: list, xlab: str, w=440, h=200, bins=50) -> 
     return "".join(out)
 
 
-def diag_html(rows, rules, dist, dp_median, depth, depth_max, max_missing, excess_het, mode) -> str:
+def diag_html(rows, rules, dist, dp_median, depth, depth_max, excess_het, mode) -> str:
     e = html.escape
     warns = [r for r in rows if r["warning"]]
     p = [f"<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
@@ -430,7 +422,7 @@ def diag_html(rows, rules, dist, dp_median, depth, depth_max, max_missing, exces
                 if depth and depth[0] == "abs":
                     marks.append((depth[1], f">{depth[1]:g}", True))
             if ann == "F_MISSING":
-                marks += [(lvl, f"{lvl:g}", max_missing is not None and abs(max_missing - lvl) < 1e-9) for lvl in MISSING_LEVELS]
+                marks += [(lvl, f"{lvl:g}", False) for lvl in MISSING_LEVELS]
             if ann == "ExcessHet":
                 marks.append((excess_het or EXCESS_HET_DEFAULT, f"{excess_het or EXCESS_HET_DEFAULT:g}", excess_het is not None))
             label = {"DP": f"INFO/DP (median {fmt_n(dp_median[t])})", "F_MISSING": "fraction of samples with no call"}.get(ann, ann)
@@ -442,9 +434,10 @@ def diag_html(rows, rules, dist, dp_median, depth, depth_max, max_missing, exces
              "<li>Depth: INFO/DP is summed over all samples, so the median scales with cohort size and coverage; a ceiling "
              "relative to it catches collapsed repeats and paralogs. Rows for every multiple are shown whether or not one "
              "is applied (<code>--max_depth</code>).</li>"
-             "<li>Missingness is measured after the genotype filter. How much to allow depends on the analysis, so it is "
-             "off unless <code>--max_missing</code> is set; check per-sample missingness first, since a few poor samples "
-             "make every site look incomplete.</li>"
+             "<li>Missingness (fraction of samples with no call after the genotype filter) is reported, never "
+             "filtered on: how much to allow depends on the analysis, so set it downstream, e.g. "
+             "<code>bcftools view -f PASS -i 'F_MISSING &lt;= 0.5'</code>. Check per-sample missingness "
+             "(<code>missingness/</code>) first, since a few poor samples make every site look incomplete.</li>"
              "<li>ExcessHet flags sites where too many samples are heterozygous (paralogs). Don't apply it to F1 crosses, "
              "where every site that differs between the parents is heterozygous in all offspring.</li></ul></body></html>")
     return "\n".join(p)
@@ -493,7 +486,6 @@ def main(argv=None) -> int:
     s.add_argument("--snp-filters", dest="snp_filters", default="")
     s.add_argument("--indel-filters", dest="indel_filters", default="")
     s.add_argument("--max-depth", dest="max_depth", default=None)
-    s.add_argument("--max-missing", dest="max_missing", default=None)
     s.add_argument("--excess-het", dest="excess_het", default=None)
     s.add_argument("--expect-records", dest="expect_records", type=int, default=None)
     s.add_argument("--summary", default="filter_summary.tsv")

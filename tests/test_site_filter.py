@@ -119,9 +119,12 @@ class SiteFilterTest(unittest.TestCase):
         r = Run(self.tmp, [site(1, DP=500), site(2, DP=1500)], max_depth="1000")
         self.assertEqual((r.filters[1], r.filters[2]), ("PASS", "HighDepth"))
 
-    def test_missing_and_excess_het(self):
-        r = Run(self.tmp, [site(1, F_MISSING=0.3), site(2, ExcessHet=60), site(3)], max_missing=0.2, excess_het="true")
-        self.assertEqual(r.filters[1], "HighMissing")
+    def test_missing_reported_not_filtered_and_excess_het(self):
+        r = Run(self.tmp, [site(1, F_MISSING=0.9), site(2, ExcessHet=60), site(3)], excess_het="true")
+        self.assertEqual(r.filters[1], "PASS")                 # missingness never flags a site
+        fm = [d for d in r.diag if d["variant_type"] == "SNPs" and d["annotation"] == "F_MISSING"]
+        self.assertEqual([d["applied"] for d in fm], ["no"] * 3)
+        self.assertEqual(fm[2]["n_flagged"], "1")              # but is reported: 1 site > 0.5
         self.assertEqual(r.filters[2], "ExcessHet")
         self.assertEqual(r.filters[3], "PASS")
 

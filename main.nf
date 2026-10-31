@@ -80,9 +80,10 @@ if (params.max_depth != null && params.max_depth != false &&
         !(params.max_depth.toString() ==~ /\d+(\.\d+)?x?/)) {
     error "ERROR: --max_depth must be a multiple of the median site depth (e.g. 2x) or a number (got ${params.max_depth})"
 }
-if (params.max_missing != null && params.max_missing != false &&
-        !(params.max_missing instanceof Number && params.max_missing >= 0 && params.max_missing < 1)) {
-    error "ERROR: --max_missing must be a fraction from 0 to 1 (got ${params.max_missing})"
+if (params.max_missing != null) {
+    error "ERROR: --max_missing has been removed: site missingness is reported (filter_reports/filter_diagnostics.html, " +
+          "missingness/), not filtered on, because how much to allow depends on the analysis. Filter downstream, e.g. " +
+          "bcftools view -f PASS -i 'F_MISSING <= 0.5'"
 }
 if (!(params.excess_het in [true, false, null] || (params.excess_het instanceof Number && params.excess_het > 0))) {
     error "ERROR: --excess_het must be true (GATK's 54.69), a number, or false (got ${params.excess_het})"
