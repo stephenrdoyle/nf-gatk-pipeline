@@ -28,9 +28,9 @@ Each step in more detail:
 3. **`HAPLOTYPE_CALLER`** writes one GVCF per sample per window. It uses 200 bp of padding so variants at window edges are assembled with full context.
 4. **`GENOMICS_DB_IMPORT`** builds a GenomicsDB workspace holding all samples for each joint-genotyping *piece*, a `--genotype_window_size` slice of a window (2 Mb by default). A window's pieces start as soon as all its samples have finished HaplotypeCaller, and fragments are consolidated at the end of the import (`--genomicsdb_consolidate`).
 5. **`GENOTYPE_GVCFS`** joint-genotypes each piece. Each variant is emitted only by the piece it starts in, so there are no duplicates at piece edges.
-6. **`GATHER_VCFS`** concatenates the pieces, in reference order, into `cohort.genotyped.vcf.gz`.
+6. **`GATHER_VCFS`** concatenates the pieces, in reference order, into the cohort VCF (published as `<cohort>.1_genotyped.vcf.gz`).
 7. **`GENOTYPE_FILTER`** sets individual genotypes with low DP or GQ to no-call (`./.`).
-8. **`SITE_FILTER`** flags failing sites in the `FILTER` column of `cohort.filtered.vcf.gz`, in one bcftools pass; nothing is removed. SNP rules apply to SNPs, indel rules to indels and mixed sites (SNP and indel alleles at one position). It also writes the filter summary and a diagnostics page (see [Variant filtering](#variant-filtering)).
+8. **`SITE_FILTER`** flags failing sites in the `FILTER` column of the final VCF, `<cohort>.2_final_flagged.vcf.gz`, in one bcftools pass; nothing is removed. SNP rules apply to SNPs, indel rules to indels and mixed sites (SNP and indel alleles at one position). It also writes the filter summary and a diagnostics page (see [Variant filtering](#variant-filtering)).
 9. **QC:** bcftools stats and per-sample missingness before filtering (all sites) and after (PASS sites only, since filters only flag sites), plus a per-filter summary, collected into a MultiQC report.
 
 ## Requirements
@@ -101,6 +101,8 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 | `--samplesheet` | *(required)* | Samplesheet CSV |
 | `--reference` | *(required)* | Reference FASTA |
 | `--outdir` | `results` | Output directory |
+| `--cohort` | `cohort` | Name for this cohort, used as the prefix of the published VCFs, e.g. `--cohort F2` gives `F2.2_final_flagged.vcf.gz` |
+| `--write_pass_vcf` | `false` | Also write the final VCF with failing sites removed, `<cohort>.2_final_PASS.vcf.gz` |
 | `--window_size` | `10000000` | HaplotypeCaller window size in bp. Larger than the longest contig = one window per contig |
 | `--genotype_window_size` | `2000000` | GenomicsDBImport/GenotypeGVCFs piece size in bp, within each window. ≥ `--window_size` = one piece per window. Can be changed without rerunning HaplotypeCaller |
 | `--genomicsdb_consolidate` | `true` | Merge GenomicsDB's per-batch fragments after import, so GenotypeGVCFs reads one |
@@ -123,11 +125,13 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 
 ## Variant filtering
 
-Filtering never removes sites. Each site in `cohort.filtered.vcf.gz` gets `PASS` or the names of the filters it failed. To keep only passing sites:
+Filtering never removes sites, which is what `flagged` in the final VCF's name means. Each site in `<cohort>.2_final_flagged.vcf.gz` gets `PASS` or the names of the filters it failed. To keep only passing sites:
 
 ```bash
-bcftools view -f PASS results/cohort.filtered.vcf.gz
+bcftools view -f PASS results/vcf/F2.2_final_flagged.vcf.gz
 ```
+
+or run with `--write_pass_vcf` to have the pipeline write `<cohort>.2_final_PASS.vcf.gz` as well (another copy of most of the VCF, so off by default).
 
 **`hard` (default):** GATK's recommended thresholds.
 
@@ -169,17 +173,17 @@ A site missing an annotation passes that filter, as in GATK.
 - **The GQ filter is skipped.**
 - **Low-frequency alleles may be missed,** because the diploid calling model is built for individuals rather than pools.
 
-The output is `cohort.pooled_annotated.vcf.gz`. Stats and missingness are computed on the VCF before masking.
+The result is `<cohort>.3_pooled_final.vcf.gz`. Stats and missingness are computed on the VCF before masking.
 
 ## Output
 
 ```
 results/
-├── variants/
-│   └── cohort.genotyped.vcf.gz            joint-genotyped cohort, unfiltered
-├── cohort.genotype_filtered.vcf.gz        after per-genotype DP/GQ filtering
-├── cohort.filtered.vcf.gz                 final: sites flagged PASS or by filter name
-├── cohort.pooled_annotated.vcf.gz         --pooled only: GT masked, FORMAT/AF added
+├── vcf/                                   <cohort> is --cohort (default 'cohort')
+│   ├── <cohort>.1_genotyped.vcf.gz        raw joint calls: the restart point for new genotype thresholds
+│   ├── <cohort>.2_final_flagged.vcf.gz    FINAL: all sites, genotypes masked (DP/GQ), FILTER = PASS or reason
+│   ├── <cohort>.2_final_PASS.vcf.gz       --write_pass_vcf only: the final VCF, PASS sites only
+│   └── <cohort>.3_pooled_final.vcf.gz     --pooled only: the result in pooled mode (GT masked, FORMAT/AF added)
 ├── filter_reports/
 │   ├── filter_summary.tsv                 sites per filter: all, PASS, each filter, "only this filter"
 │   └── filter_diagnostics.{html,tsv}      each threshold against this cohort's distributions
@@ -193,7 +197,7 @@ results/
 └── pipeline_timeline.html
 ```
 
-Every VCF has a `.tbi` index alongside it. Result VCFs are hard links to the files in `work/` (`--publish_mode link`), so they take no extra space. `run_pipeline.sh` writes the Nextflow report and timeline (plus a DAG) to `results/reports/` instead of the top level.
+Every VCF has a `.tbi` index alongside it. The genotype-masked VCF between steps 1 and 2 isn't published: the final VCF has exactly the same genotypes, plus the `FILTER` column. To try different site filters, use the final VCF as the input (`benchmarks/filter_comparison/site_filter_standalone.sh` replaces its `FILTER` column); for different genotype thresholds, start from `1_genotyped`. Result VCFs are hard links to the files in `work/` (`--publish_mode link`), so they take no extra space. `run_pipeline.sh` writes the Nextflow report and timeline (plus a DAG) to `results/reports/` instead of the top level.
 
 ## Resources, retries and failures
 

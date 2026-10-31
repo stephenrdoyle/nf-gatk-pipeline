@@ -25,6 +25,7 @@ include { GNARLY_GENOTYPER    } from './modules/gnarly_genotyper'
 include { GATHER_VCFS         } from './modules/gather_vcfs'
 include { GENOTYPE_FILTER     } from './modules/genotype_filter'
 include { SITE_FILTER         } from './modules/site_filter'
+include { PASS_VCF            } from './modules/pass_vcf'
 include { BCFTOOLS_STATS as BCFTOOLS_STATS_RAW      } from './modules/bcftools_stats'
 include { BCFTOOLS_STATS as BCFTOOLS_STATS_FILTERED } from './modules/bcftools_stats'
 include { SAMPLE_MISSINGNESS as SAMPLE_MISSINGNESS_RAW      } from './modules/sample_missingness'
@@ -43,6 +44,11 @@ include { SOFTWARE_VERSIONS   } from './modules/software_versions'
 // Guard: required inputs
 if (!params.samplesheet || !params.reference) {
     error "ERROR: --samplesheet and --reference are required"
+}
+
+// Guard: --cohort becomes part of every published VCF name
+if (!(params.cohort ==~ /[A-Za-z0-9._-]+/)) {
+    error "ERROR: --cohort may only use letters, digits, '.', '_' and '-' (got '${params.cohort}')"
 }
 
 // Guard: joint-genotyping piece size
@@ -402,6 +408,11 @@ workflow {
         final_vcf = merged_vcf
     }
 
+    // --write_pass_vcf: the final VCF with failing sites removed
+    if (params.write_pass_vcf) {
+        PASS_VCF(final_vcf)
+    }
+
     // --- 12. Stats + per-sample missingness on the filtered VCF, PASS sites ---
     // Filters only flag sites, so without restricting to PASS these would
     // count failed sites too. Run on merged_vcf, before pool annotation: in
@@ -433,11 +444,19 @@ workflow {
             )
             .collect()
 
+        // VCFs are renamed as they're published; CLEANUP needs the published
+        // names to check each copy is complete before deleting the original
+        def published_names = [
+            'cohort.genotyped.vcf.gz': "${params.cohort}.1_genotyped.vcf.gz",
+            'cohort.filtered.vcf.gz' : "${params.cohort}.2_final_flagged.vcf.gz",
+        ].collectMany { work, pub -> [ "${work}\t${pub}", "${work}.tbi\t${pub}.tbi" ] }.join('\n')
+
         CLEANUP(
             MULTIQC.out.report,
             cleanup_targets,
             workflow.workDir.toString(),
-            file(params.outdir).toAbsolutePath().toString()
+            file(params.outdir).toAbsolutePath().toString(),
+            published_names
         )
     }
 }

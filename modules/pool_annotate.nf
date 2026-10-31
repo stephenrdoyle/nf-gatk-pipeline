@@ -2,7 +2,8 @@ process POOL_ANNOTATE {
     tag "pool_annotate"
     label 'process_low'
 
-    publishDir "${params.outdir}", mode: params.publish_mode
+    publishDir "${params.outdir}/vcf", mode: params.publish_mode,
+        saveAs: { fn -> fn.replace('cohort.pooled_annotated', "${params.cohort}.3_pooled_final") }
 
     input:
     tuple path(vcf), path(tbi)

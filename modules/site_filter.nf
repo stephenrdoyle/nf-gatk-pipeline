@@ -23,7 +23,8 @@ process SITE_FILTER {
     tag "site_filter"
     label 'process_medium'
 
-    publishDir "${params.outdir}", mode: params.publish_mode, pattern: 'cohort.filtered.vcf.gz*'
+    publishDir "${params.outdir}/vcf", mode: params.publish_mode, pattern: 'cohort.filtered.vcf.gz*',
+        saveAs: { fn -> fn.replace('cohort.filtered', "${params.cohort}.2_final_flagged") }
     publishDir "${params.outdir}/filter_reports", mode: 'copy', pattern: '{filter_summary.tsv,filter_diagnostics.*}'
 
     input:
