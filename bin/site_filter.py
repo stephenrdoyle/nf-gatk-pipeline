@@ -439,7 +439,8 @@ def diag_html(rows, rules, dist, dp_median, depth, depth_max, excess_het, mode) 
              "<code>bcftools view -f PASS -i 'F_MISSING &lt;= 0.5'</code>. Check per-sample missingness "
              "(<code>missingness/</code>) first, since a few poor samples make every site look incomplete.</li>"
              "<li>ExcessHet flags sites where too many samples are heterozygous (paralogs). Don't apply it to F1 crosses, "
-             "where every site that differs between the parents is heterozygous in all offspring.</li></ul></body></html>")
+             "where every offspring is heterozygous at sites the parental strains have fixed differently (single "
+             "parents or pools alike).</li></ul></body></html>")
     return "\n".join(p)
 
 
