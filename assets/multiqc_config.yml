@@ -10,7 +10,7 @@ custom_data:
         id: "filter_summary"
         section_name: "Variant Filter Summary"
         description: >-
-            Sites per site filter, from the filtered VCFs' FILTER column.
+            Sites per site filter, from the filtered VCF's FILTER column (SNPs and indels separately).
             Filters only flag sites, so "all sites" is the same before and after;
             PASS is what is kept. "Only this filter" counts sites that fail this
             filter and no other. Filters that flagged no sites are not listed.
