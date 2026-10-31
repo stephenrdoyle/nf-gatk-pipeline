@@ -4,6 +4,8 @@ process PREFLIGHT {
      * (main.nf holds VALIDATE_BAM, and so HaplotypeCaller, until this passes):
      *   - the process.beforeScript modules provide gatk, samtools, bcftools
      *     (with its setGT plugin) and python3
+     *   - with the QC report on, the bcftools prune plugin (QC_EXTRACT), and
+     *     --sex_chrom / --mito_chrom name contigs in the reference
      *   - every BAM's @SQ contigs (names, lengths, order) match the
      *     reference .fai; GATK refuses mismatched dictionaries, and would
      *     otherwise fail once per window for each bad BAM
@@ -21,6 +23,8 @@ process PREFLIGHT {
     input:
     val  bam_list   // "sample_id<TAB>/abs/path.bam" lines, one per sample
     path fai
+    val  qc_contigs // "--sex_chrom=<name> --mito_chrom=<name>" (set ones only), or '' with the QC report off
+    val  qc_report  // true: check what QC_EXTRACT needs
 
     output:
     val true, emit: ok
@@ -40,6 +44,17 @@ process PREFLIGHT {
         bcftools plugin -l 2>/dev/null | grep -qw setGT \\
             || fail "bcftools plugin 'setGT' not found (needed by GENOTYPE_FILTER): check BCFTOOLS_PLUGINS / the bcftools module"
     fi
+
+    # ── QC report: prune plugin, and the --sex_chrom / --mito_chrom contigs ──
+    if [ '${qc_report}' = true ] && command -v bcftools >/dev/null 2>&1; then
+        bcftools plugin -l 2>/dev/null | grep -qw prune \\
+            || fail "bcftools plugin 'prune' not found (needed by QC_EXTRACT): check the bcftools module, or run with --qc_report false"
+    fi
+    for opt in ${qc_contigs}; do
+        contig=\${opt#*=}
+        cut -f1 ${fai} | grep -qxF "\$contig" \\
+            || fail "\${opt%%=*} \$contig is not a contig in ${fai}; it has \$(grep -c . ${fai}) contigs: \$(awk -F'\\t' 'NR <= 12 { printf "%s%s (%s bp)", (NR > 1 ? ", " : ""), \$1, \$2 } END { if (NR > 12) printf ", ..." }' ${fai})"
+    done
 
     # ── BAM contigs vs reference ──────────────────────────────────────────────
     cut -f1,2 ${fai} > reference_contigs.tsv

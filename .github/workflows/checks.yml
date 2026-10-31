@@ -20,6 +20,9 @@ jobs:
       # Renders every script:/stub: block as Groovy would (interpolation and
       # escapes), then runs bash -n and compiles embedded Python
       - run: python3 tests/check_scripts.py
+      # QC report on synthetic inputs: planted problems must be flagged
+      - name: QC report tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
 
   nextflow:
     name: Nextflow parse (-preview)

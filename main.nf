@@ -40,6 +40,7 @@ include { POOL_ANNOTATE       } from './modules/pool_annotate'
 include { ESTIMATE_HETEROZYGOSITY; HETEROZYGOSITY_SUMMARY } from './modules/heterozygosity'
 include { PREFLIGHT           } from './modules/preflight'
 include { SOFTWARE_VERSIONS   } from './modules/software_versions'
+include { QC_EXTRACT; QC_SNPRELATE; QC_REPORT } from './modules/qc'
 
 // ---------------------------------------------------------------------------
 // Parameter defaults: defined once, in the params block of nextflow.config
@@ -59,6 +60,14 @@ if (!(params.genotype_window_size instanceof Number) || params.genotype_window_s
 if (params.heterozygosity != null && params.heterozygosity != 'auto' &&
         !(params.heterozygosity instanceof Number && params.heterozygosity > 0 && params.heterozygosity < 1)) {
     error "ERROR: --heterozygosity must be 'auto' or a number between 0 and 1 (got ${params.heterozygosity})"
+}
+
+// Guard: QC contigs
+if (params.sex_chrom && params.sex_chrom == params.mito_chrom) {
+    error "ERROR: --sex_chrom and --mito_chrom are the same contig (${params.sex_chrom})"
+}
+if (!(params.qc_maf instanceof Number && params.qc_maf >= 0 && params.qc_maf < 0.5)) {
+    error "ERROR: --qc_maf must be a number from 0 to 0.5 (got ${params.qc_maf})"
 }
 
 // Guard: custom filter mode requires filter expressions
@@ -89,6 +98,12 @@ def preflight_launch_checks() {
         // duplicates would overwrite each other's GVCFs, silently losing a sample
         def dups = ids.countBy { it }.findAll { id, n -> id && n > 1 }.keySet()
         if (dups) problems << "duplicate sample_ids: ${dups.take(5).join(', ')}"
+        // optional 'sex' column, read by the QC report's chrX check
+        if ('sex' in cols) {
+            def bad = rows.findAll { r -> !((r.sex ?: '').trim().toLowerCase() in ['m', 'male', '1', 'f', 'female', '2', '', 'na', 'unknown', '0']) }
+            if (bad) problems << "'sex' must be M, F, male, female, 1, 2 or blank/NA/unknown: " +
+                                 bad.take(5).collect { "${it.sample_id}=${it.sex}" }.join(', ')
+        }
 
         rows.each { row ->
             def bam = file(row.bam)
@@ -181,6 +196,13 @@ workflow {
         }
     }
 
+    // --- End-of-run QC report: not in pooled mode, where per-sample
+    //     genotypes (and so PCA, kinship and sex checks) are meaningless ---
+    def run_qc = params.qc_report && !params.pooled
+    if (params.qc_report && params.pooled) {
+        log.warn "No QC report in pooled mode: per-sample genotypes aren't meaningful for PCA, kinship or sex checks"
+    }
+
     // --- 0. Reference files ---
     reference = file(params.reference, checkIfExists: true)
 
@@ -209,7 +231,10 @@ workflow {
             .map { sample_id, bam, bai -> "${sample_id}\t${bam}" }
             .collect()
             .map { it.join('\n') },
-        reference_fai
+        reference_fai,
+        run_qc ? [ sex_chrom: params.sex_chrom, mito_chrom: params.mito_chrom ]
+                     .findAll { k, v -> v }.collect { k, v -> "--${k}=${v}" }.join(' ') : '',
+        run_qc
     )
     raw_bams = parse_samplesheet(params.samplesheet)
         .combine(PREFLIGHT.out.ok)
@@ -431,7 +456,51 @@ workflow {
         .collect()
     MULTIQC(multiqc_files)
 
-    // --- 17. Cleanup intermediate work directories (opt-in) ---
+    // --- 17. Cohort QC report (<outdir>/qc_report.html) ---
+    // PASS sites of the filtered VCF: nuclear PCA, kinship, per-sample
+    // outliers, and the optional chrX and mito checks (--sex_chrom,
+    // --mito_chrom). See modules/qc.nf.
+    if (run_qc) {
+        QC_EXTRACT(merged_vcf, params.sex_chrom ?: '', params.mito_chrom ?: '', params.qc_maf)
+        QC_SNPRELATE(QC_EXTRACT.out.nuclear, QC_EXTRACT.out.mito, params.qc_ld_threshold)
+
+        // sample, sex, group from the samplesheet (sex and group optional)
+        def sheet_rows = file(params.samplesheet).splitCsv(header: true)
+        def samples_tsv = (['sample\tsex\tgroup'] + sheet_rows.collect { r ->
+            [ r.sample_id, (r.sex ?: '').trim(), (r.group ?: '').trim() ].join('\t')
+        }).join('\n')
+
+        // Completeness: samples and joint-genotyping pieces actually gathered
+        qc_meta = n_samples
+            .combine(genotype_pieces.count())
+            .combine(genotyped_vcfs.count())
+            .map { ns, pieces_expected, pieces_gathered ->
+                groovy.json.JsonOutput.toJson([
+                    run_name           : workflow.runName,
+                    sex_chrom          : params.sex_chrom ?: '',
+                    mito_chrom         : params.mito_chrom ?: '',
+                    qc_maf             : params.qc_maf,
+                    qc_ld_threshold    : params.qc_ld_threshold,
+                    filter_mode        : params.filter_mode,
+                    n_samples_expected : ns,
+                    n_pieces_expected  : pieces_expected,
+                    n_pieces_gathered  : pieces_gathered,
+                ])
+            }
+
+        qc_inputs = QC_EXTRACT.out.stats
+            .mix(QC_EXTRACT.out.density,
+                 QC_SNPRELATE.out.pca, QC_SNPRELATE.out.kinship,
+                 QC_SNPRELATE.out.counts, QC_SNPRELATE.out.notes,
+                 BCFTOOLS_STATS_RAW.out.stats, BCFTOOLS_STATS_FILTERED.out.stats,
+                 SAMPLE_MISSINGNESS_FILTERED.out.missingness,
+                 FILTER_SUMMARY.out.summary, SOFTWARE_VERSIONS.out.versions)
+            .flatten()
+            .collect()
+        QC_REPORT(qc_inputs, samples_tsv, qc_meta)
+    }
+
+    // --- 18. Cleanup intermediate work directories (opt-in) ---
     // One output per task is enough: CLEANUP empties the task directory
     // that produced it. Validated BAMs are deliberately not included.
     if (params.cleanup) {
