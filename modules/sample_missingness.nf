@@ -48,7 +48,12 @@ process SAMPLE_MISSINGNESS {
     # DP doesn't match, as before.
     # SNP = REF and every ALT (ignoring the spanning deletion '*') single
     # bases, the same rule as the site filter; anything else is an indel.
-    if [ ${dp_thr} -gt 0 ]; then
+    # A VCF without FORMAT/DP has nothing to count (the awk version skipped
+    # such records); bcftools would reject the expression outright. The
+    # header goes to a file first: grep -q would cut the pipe short, and
+    # under pipefail that SIGPIPE would read as "no DP".
+    bcftools view --header-only ${vcf} > header.txt
+    if [ ${dp_thr} -gt 0 ] && grep -q '^##FORMAT=<ID=DP,' header.txt; then
         bcftools view --threads ${task.cpus} ${filter_arg} -Ou ${vcf} \\
             | bcftools query -i 'FMT/DP<${dp_thr}' -f '%REF\\t%ALT[\\t%SAMPLE]\\n' \\
             | awk 'BEGIN { FS = OFS = "\\t" }
