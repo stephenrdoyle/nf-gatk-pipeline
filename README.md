@@ -206,7 +206,7 @@ Then: nuclear PCA (PC1–4, coloured by `group`), the kinship distribution, the 
 The PCA and kinship use PASS biallelic SNPs with minor allele frequency ≥ `--qc_maf`, at most one per kb, then LD-pruned with [SNPRelate](https://bioconductor.org/packages/SNPRelate/) (run from a pinned Biocontainers image, `--snprelate_container`). `--sex_chrom` and `--mito_chrom` are optional; without them every contig counts as nuclear. For *H. contortus*:
 
 ```bash
---sex_chrom hcontortus_chrX_Celeg_TT_arrow_pilon --mito_chrom hcontortus_mtDNA
+--sex_chrom hcontortus_chrX_Celeg_TT_arrow_pilon --mito_chrom mitochondrion
 ```
 
 ## Resources, retries and failures

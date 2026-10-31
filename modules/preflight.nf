@@ -53,7 +53,7 @@ process PREFLIGHT {
     for opt in ${qc_contigs}; do
         contig=\${opt#*=}
         cut -f1 ${fai} | grep -qxF "\$contig" \\
-            || fail "\${opt%%=*} \$contig is not a contig in ${fai} (e.g. \$(head -3 ${fai} | cut -f1 | paste -sd, -))"
+            || fail "\${opt%%=*} \$contig is not a contig in ${fai}; it has \$(grep -c . ${fai}) contigs: \$(awk -F'\\t' 'NR <= 12 { printf "%s%s (%s bp)", (NR > 1 ? ", " : ""), \$1, \$2 } END { if (NR > 12) printf ", ..." }' ${fai})"
     done
 
     # ── BAM contigs vs reference ──────────────────────────────────────────────
