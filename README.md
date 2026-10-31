@@ -109,7 +109,6 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 | `--filter_mode` | `hard` | `hard` (GATK's thresholds) or `custom` (see [Variant filtering](#variant-filtering)) |
 | `--snp_filters` / `--indel_filters` | — | Custom mode: comma-separated `<INFO tag> <op> <number>` expressions, e.g. `"QD < 2.0,FS > 60.0"` |
 | `--max_depth` | `2x` | Flag sites with INFO/DP above this: a multiple of the median site depth, or a number; `false` turns it off |
-| `--max_missing` | — | Flag sites where more than this fraction of samples has no call after the genotype filter, e.g. `0.2`. Off unless set |
 | `--excess_het` | `false` | Flag sites with too many heterozygotes: `true` (ExcessHet > 54.69) or a number. Not for F1 crosses |
 | `--genotype_dp_threshold` | `5` | Genotypes with `DP` below this are set to no-call |
 | `--genotype_gq_threshold` | `20` | Genotypes with `GQ` below this are set to no-call (not in pooled or Gnarly mode) |
@@ -146,13 +145,18 @@ A site missing an annotation passes that filter, as in GATK.
 
 **`custom`:** your own thresholds, via `--snp_filters` and `--indel_filters` (both required). Each is a comma-separated list of `<INFO tag> <op> <number>`, with `<`, `<=`, `>`, `>=`, `==` or `!=`, e.g. `--snp_filters "QD < 2.0,MQ < 40.0,FS > 60.0"`. Filter names are built from the expression (`SNP_QD_lt_2.0`).
 
-**Further site filters**, in either mode. The depth ceiling is on by default; the other two are off unless set:
+**Further site filters**, in either mode. The depth ceiling is on by default; ExcessHet is off unless set:
 
 | Option | Flags | Catches | Caution |
 |---|---|---|---|
 | `--max_depth 2x` (default) | `HighDepth`: INFO/DP above 2 × the median site depth (SNPs and indels separately), or a fixed number | Collapsed repeats and duplications | On F2 it flagged 1.1% of SNPs. A fifth of them sat in 57 blocks of 100 kb (2% of the genome), and they were 10× more often ExcessHet than chance: paralogs, not noise. Being relative to the cohort's own median, it adapts to any coverage or cohort size. `false` turns it off |
-| `--max_missing 0.2` | `HighMissing`: more than 20% of samples uncalled after the genotype filter | Sites genotyped in too few samples | How much to allow depends on the analysis. On the F2 cohort 0.2 flagged 30% of SNPs, so check per-sample missingness first: a few poor samples make every site look incomplete |
 | `--excess_het` | `ExcessHet`: GATK's ExcessHet above 54.69 | Paralogs (nearly every sample heterozygous) | **Never for F1 crosses**: every site that differs between the parents is heterozygous in all offspring |
+
+**Missingness is reported, not filtered on.** How many uncalled samples a site can have depends on the analysis: linkage maps need nearly complete sites, while PCA or selection scans tolerate more. So the pipeline reports it, and you filter for each analysis:
+- **per sample:** `missingness/after_filter_missingness.tsv`; check this first, since a few poor samples make every site look incomplete
+- **per site:** the missingness histogram and the share of sites above 0.1, 0.2 and 0.5 in `filter_reports/filter_diagnostics.html`
+
+To filter downstream, e.g. at most half the samples uncalled: `bcftools view -f PASS -i 'F_MISSING <= 0.5' <cohort>.2_final_flagged.vcf.gz`. On the F2 cohort, every sample was 14–21% missing (no poor samples), and more than half the samples were uncalled at 11% of SNPs. Missingness was not specific to either cross (each 100 samples), and the share of samples missing per site fell smoothly from 0 with a long tail, so it reflects site quality and coverage rather than a few bad samples or one cross.
 
 **Checking the thresholds suit your cohort.** The thresholds are fixed, so the same PASS definition holds across studies. `filter_reports/filter_diagnostics.html` shows whether they fit each cohort. For every annotation it shows a histogram with the thresholds marked, the share of sites flagged, and the sites flagged by that filter alone. It also shows depth, missingness and ExcessHet at several levels whether or not they are applied, so you can see what each option would do before turning it on. A warning appears when one filter flags more than 10% of sites. If a threshold sits inside the bulk of a distribution, tune it with `custom`.
 
