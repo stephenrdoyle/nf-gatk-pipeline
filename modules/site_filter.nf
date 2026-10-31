@@ -17,7 +17,7 @@ process SITE_FILTER {
      *
      * Rules: --filter_mode hard (GATK's thresholds) or custom (--snp_filters,
      * --indel_filters); --max_depth (default 2x the median site depth); optional
-     * --max_missing, --excess_het.
+     * --excess_het. Missingness is reported in the diagnostics, never filtered on.
      * Sites are flagged, never removed.
      */
     tag "site_filter"
@@ -68,7 +68,6 @@ process SITE_FILTER {
         --contigs contigs.txt \\
         ${rule_args} \\
         ${opt('--max-depth', params.max_depth)} \\
-        ${opt('--max-missing', params.max_missing)} \\
         ${opt('--excess-het', excess_het)} \\
         | bcftools view -Oz -o decisions.vcf.gz
     bcftools index --tbi decisions.vcf.gz
