@@ -450,7 +450,8 @@ workflow {
     // --mito_chrom). See modules/qc.nf.
     if (run_qc) {
         QC_EXTRACT(merged_vcf, params.sex_chrom ?: '', params.mito_chrom ?: '', params.qc_maf)
-        QC_SNPRELATE(QC_EXTRACT.out.nuclear, QC_EXTRACT.out.mito, params.qc_ld_threshold)
+        QC_SNPRELATE(QC_EXTRACT.out.nuclear, QC_EXTRACT.out.mito, params.qc_ld_threshold,
+                     file("${projectDir}/bin/qc_snprelate.R", checkIfExists: true))
 
         // sample, sex, group from the samplesheet (sex and group optional)
         def sheet_rows = file(params.samplesheet).splitCsv(header: true)

@@ -81,13 +81,19 @@ process QC_EXTRACT {
 }
 
 process QC_SNPRELATE {
-    // Container (params.snprelate_container) is set in nextflow.config
+    // Container (params.snprelate_container) is set in nextflow.config.
+    // The R script is an input, copied into the work directory: inside the
+    // container only /lustre (work, data) is reliably visible, not the
+    // pipeline clone under /nfs/users (bin/ isn't on PATH there either, and
+    // its full path fails). Copying also makes the script part of the cache key.
     tag "qc"
+    stageInMode 'copy'
 
     input:
     path nuclear
     path mito
     val  ld_threshold
+    path snprelate_r    // bin/qc_snprelate.R
 
     output:
     path "pca_*.tsv",       emit: pca
@@ -96,11 +102,8 @@ process QC_SNPRELATE {
     path "notes.txt",       emit: notes
 
     script:
-    // Full path: Nextflow puts bin/ on PATH for tasks on the host, but not
-    // inside this Singularity container (exit 127, 'command not found').
-    // projectDir is under /nfs or /lustre, both bound into the container.
     """
-    Rscript ${projectDir}/bin/qc_snprelate.R ${nuclear} ${mito} ${ld_threshold} ${task.cpus}
+    Rscript ${snprelate_r} ${nuclear} ${mito} ${ld_threshold} ${task.cpus}
     """
 
     stub:
