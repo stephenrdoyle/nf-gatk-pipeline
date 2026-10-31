@@ -144,7 +144,7 @@ A site missing an annotation passes that filter, as in GATK.
 | Option | Flags | Catches | Caution |
 |---|---|---|---|
 | `--max_depth 2x` (default) | `HighDepth`: INFO/DP above 2 × the median site depth (SNPs and indels separately), or a fixed number | Collapsed repeats and duplications | On F2 it flagged 1.1% of SNPs. A fifth of them sat in 57 blocks of 100 kb (2% of the genome), and they were 10× more often ExcessHet than chance: paralogs, not noise. Being relative to the cohort's own median, it adapts to any coverage or cohort size. `false` turns it off |
-| `--excess_het` | `ExcessHet`: GATK's ExcessHet above 54.69 | Paralogs (nearly every sample heterozygous) | **Never for F1 crosses**: every site that differs between the parents is heterozygous in all offspring |
+| `--excess_het` | `ExcessHet`: GATK's ExcessHet above 54.69 | Paralogs (nearly every sample heterozygous) | **Never for F1 crosses**: at sites where the two parental strains carry different fixed alleles, every F1 is heterozygous, so ExcessHet would remove the most informative sites. Whether the parents were single individuals or pools, as for MF13 × MF22/MH21, doesn't matter. F2s are fine: F1s mating among themselves give roughly Hardy–Weinberg proportions, and combining crosses only lowers heterozygosity |
 
 **Missingness is reported, not filtered on.** How many uncalled samples a site can have depends on the analysis: linkage maps need nearly complete sites, while PCA or selection scans tolerate more. So the pipeline reports it, and you filter for each analysis:
 - **per sample:** `missingness/after_filter_missingness.tsv`; check this first, since a few poor samples make every site look incomplete
