@@ -96,8 +96,11 @@ process QC_SNPRELATE {
     path "notes.txt",       emit: notes
 
     script:
+    // Full path: Nextflow puts bin/ on PATH for tasks on the host, but not
+    // inside this Singularity container (exit 127, 'command not found').
+    // projectDir is under /nfs or /lustre, both bound into the container.
     """
-    qc_snprelate.R ${nuclear} ${mito} ${ld_threshold} ${task.cpus}
+    Rscript ${projectDir}/bin/qc_snprelate.R ${nuclear} ${mito} ${ld_threshold} ${task.cpus}
     """
 
     stub:
