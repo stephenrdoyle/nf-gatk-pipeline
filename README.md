@@ -202,13 +202,15 @@ results/
 │                                          before_filter (all sites) / after_filter (PASS sites)
 ├── qc_report.html                         cohort QC: samples, PCA, kinship, sex, mito (see below)
 ├── multiqc/multiqc_report.html            QC summary
-├── pipeline_info/software_versions.txt    tool and module versions, git commit, command line
-├── pipeline_trace_<timestamp>.txt         one row per task attempt (see below)
-├── pipeline_report.html
-└── pipeline_timeline.html
+└── pipeline_info/                         about the run, not the results
+    ├── software_versions.txt              tool and module versions, git commit, command line
+    ├── pipeline_trace_<time>.txt          one row per task attempt (see below)
+    ├── pipeline_report_<time>.html        Nextflow's run report: resources and time per step
+    ├── pipeline_timeline_<time>.html      when each task ran
+    └── pipeline_dag.html                  the workflow as a diagram
 ```
 
-Every VCF has a `.tbi` index alongside it. The genotype-masked VCF between steps 1 and 2 isn't published: the final VCF has exactly the same genotypes, plus the `FILTER` column. To try different site filters, use the final VCF as the input (`benchmarks/filter_comparison/site_filter_standalone.sh` replaces its `FILTER` column); for different genotype thresholds, start from `1_genotyped`. Result VCFs are hard links to the files in `work/` (`--publish_mode link`), so they take no extra space. `run_pipeline.sh` writes the Nextflow report and timeline (plus a DAG) to `results/reports/` instead of the top level.
+Every VCF has a `.tbi` index alongside it. The genotype-masked VCF between steps 1 and 2 isn't published: the final VCF has exactly the same genotypes, plus the `FILTER` column. To try different site filters, use the final VCF as the input (`benchmarks/filter_comparison/site_filter_standalone.sh` replaces its `FILTER` column); for different genotype thresholds, start from `1_genotyped`. Result VCFs are hard links to the files in `work/` (`--publish_mode link`), so they take no extra space. `<time>` is when the run started, so each `-resume` keeps the reports of the runs before it.
 
 ## QC report
 
@@ -253,7 +255,7 @@ Any other failure, or a retryable one that keeps failing, stops the run with an 
 **Finding what failed:**
 
 ```bash
-awk -F'\t' 'NR==1 || ($5 != "COMPLETED" && $5 != "CACHED")' results/pipeline_trace_*.txt
+awk -F'\t' 'NR==1 || ($5 != "COMPLETED" && $5 != "CACHED")' results/pipeline_info/pipeline_trace_*.txt
 ```
 
 ```bash

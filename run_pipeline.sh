@@ -78,11 +78,9 @@ NF_OPTS=(
     --outdir       "${OUTDIR}"
 )
 
-# nextflow.config in PIPELINE_DIR is loaded automatically
+# nextflow.config in PIPELINE_DIR is loaded automatically; it writes the run
+# report, timeline, trace and DAG to ${OUTDIR}/pipeline_info/
 nextflow run "${MAIN_NF}"        \
     -work-dir "${WORK_DIR}"      \
     "${NF_OPTS[@]}"              \
-    -resume                      \
-    -with-report   "${OUTDIR}/reports/nextflow_report.html"  \
-    -with-timeline "${OUTDIR}/reports/nextflow_timeline.html" \
-    -with-dag      "${OUTDIR}/reports/pipeline_dag.html"
+    -resume
