@@ -35,7 +35,7 @@ import sys
 
 # ── thresholds (documented in the report's Methods section) ─────────────────
 ROBUST_Z = 4.0           # |x - median| / (1.4826 * MAD) above this is an outlier
-MIN_SAMPLES_FOR_OUTLIERS = 5
+MIN_SAMPLES_FOR_OUTLIERS = 10   # below this, median/MAD are too unstable to flag anyone
 KING_DUPLICATE = 0.354   # KING kinship: duplicate / identical twin
 KING_FIRST = 0.177       # first degree (parent-offspring, full sibs)
 KING_SECOND = 0.0884
@@ -421,7 +421,7 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
     # 2. PCA
     parts.append("<h2>Population structure (nuclear PCA)</h2>")
     parts.append(f"<p class='note'>PASS biallelic SNPs, minor allele frequency ≥ {esc(meta.get('qc_maf'))}, "
-                 f"one per kb, LD-pruned at r² {esc(meta.get('qc_ld_threshold'))}"
+                 f"one per kb, LD-pruned at r² {esc(meta.get('qc_ld_threshold'))} (skipped below 20 samples)"
                  + (", sex and mito contigs excluded" if meta.get("sex_chrom") or meta.get("mito_chrom") else "")
                  + f": {fmt(snp_counts.get('nuclear_ld_pruned'))} of {fmt(snp_counts.get('nuclear_input'))} SNPs used. "
                  "Colour = samplesheet <code>group</code> (or sex label); points far from the rest are labelled.</p>")

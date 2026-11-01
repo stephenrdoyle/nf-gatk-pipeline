@@ -67,6 +67,9 @@ if (params.heterozygosity != null && params.heterozygosity != 'auto' &&
 if (params.sex_chrom && params.sex_chrom == params.mito_chrom) {
     error "ERROR: --sex_chrom and --mito_chrom are the same contig (${params.sex_chrom})"
 }
+if (!(params.qc_ld_threshold instanceof Number && params.qc_ld_threshold > 0 && params.qc_ld_threshold <= 1)) {
+    error "ERROR: --qc_ld_threshold is an r² between 0 and 1 (got ${params.qc_ld_threshold})"
+}
 if (!(params.qc_maf instanceof Number && params.qc_maf >= 0 && params.qc_maf < 0.5)) {
     error "ERROR: --qc_maf must be a number from 0 to 0.5 (got ${params.qc_maf})"
 }
@@ -422,7 +425,7 @@ workflow {
     geno_filtered_vcf = GENOTYPE_FILTER.out.filtered_vcf
 
     // --- 10. Site filters (hard or custom, plus the depth ceiling and optional
-    //     and ExcessHet), one pass; also the filter summary and diagnostics ---
+    //     ExcessHet), one pass; also the filter summary and diagnostics ---
     SITE_FILTER(geno_filtered_vcf)
     merged_vcf = SITE_FILTER.out.filtered_vcf
 

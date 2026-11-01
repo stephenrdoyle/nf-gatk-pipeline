@@ -3,7 +3,12 @@
 # and, if a mitochondrial SNP VCF is given, a mitochondrial PCA.
 #
 # Usage:
-#   qc_snprelate.R <nuclear_snps.vcf.gz> <mito_snps.vcf.gz | *.NONE> <ld_threshold> <threads>
+#   qc_snprelate.R <nuclear_snps.vcf.gz> <mito_snps.vcf.gz | *.NONE> <ld_r2> <threads>
+#
+# ld_r2 is an r² threshold; SNPRelate's method = "corr" takes |r|, so it is
+# passed as sqrt(ld_r2). With fewer than MIN_LD_SAMPLES samples LD can't be
+# estimated (a correlation over a handful of genotypes is mostly noise, and
+# prunes nearly everything), so pruning is skipped and noted.
 #
 # Inputs are already reduced by QC_EXTRACT: PASS biallelic SNPs, minor allele
 # frequency >= --qc_maf, thinned to one site per kb, with the sex and
@@ -26,7 +31,7 @@ args <- commandArgs(trailingOnly = TRUE)
 if (length(args) != 4) stop("usage: qc_snprelate.R <nuclear.vcf.gz> <mito.vcf.gz|*.NONE> <ld_threshold> <threads>")
 nuclear_vcf <- args[1]
 mito_vcf    <- args[2]
-ld          <- as.numeric(args[3])
+ld_r2       <- as.numeric(args[3])
 threads     <- as.integer(args[4])
 
 # LD pruning visits SNPs in random order: fix the seed so a rerun on the same
@@ -61,6 +66,8 @@ empty_outputs <- function() {
   write_tsv(data.frame(ID1 = character(), ID2 = character(), IBS0 = numeric(), kinship = numeric()), "kinship.tsv")
 }
 
+MIN_LD_SAMPLES <- 20
+
 # ── nuclear: LD pruning, PCA, kinship ───────────────────────────────────────
 snpgdsVCF2GDS(nuclear_vcf, "nuclear.gds", method = "biallelic.only", verbose = FALSE)
 g <- snpgdsOpen("nuclear.gds")
@@ -70,9 +77,17 @@ if (counts$nuclear_input < 100) {
                             counts$nuclear_input))
   empty_outputs()
 } else {
-  pruned <- snpgdsLDpruning(g, ld.threshold = ld, method = "corr", slide.max.bp = 500000,
-                            autosome.only = FALSE, num.thread = threads, verbose = FALSE)
-  snps <- unlist(unname(pruned))
+  n_samples <- length(read.gdsn(index.gdsn(g, "sample.id")))
+  if (n_samples < MIN_LD_SAMPLES) {
+    snps <- read.gdsn(index.gdsn(g, "snp.id"))
+    notes <- c(notes, sprintf(paste("LD pruning skipped: %d samples is too few to estimate LD (%d needed);",
+                                    "PCA and kinship use all %d SNPs (one per kb)."),
+                              n_samples, MIN_LD_SAMPLES, length(snps)))
+  } else {
+    pruned <- snpgdsLDpruning(g, ld.threshold = sqrt(ld_r2), method = "corr", slide.max.bp = 500000,
+                              autosome.only = FALSE, num.thread = threads, verbose = FALSE)
+    snps <- unlist(unname(pruned))
+  }
   counts$nuclear_ld_pruned <- length(snps)
 
   pca <- snpgdsPCA(g, snp.id = snps, autosome.only = FALSE, num.thread = threads, verbose = FALSE)

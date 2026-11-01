@@ -125,7 +125,7 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 | `--sex_chrom` | — | Sex chromosome contig (e.g. X). Adds the chrX sex check, and leaves it out of the PCA/kinship |
 | `--mito_chrom` | — | Mitochondrial contig. Adds the mito PCA and heteroplasmy check, and leaves it out of the PCA/kinship |
 | `--qc_maf` | `0.05` | Minor allele frequency for the PCA/kinship SNPs |
-| `--qc_ld_threshold` | `0.2` | SNPRelate LD pruning threshold for the PCA/kinship SNPs |
+| `--qc_ld_threshold` | `0.2` | LD pruning for the PCA/kinship SNPs, as r² (SNPs within 500 kb more correlated than this are thinned). Skipped below 20 samples, where LD can't be estimated |
 | `--publish_mode` | `link` | How result VCFs are published: `link` (hard link: no extra space, index timestamps stay correct; needs `--outdir` on the same filesystem as `work/`, checked at launch) or `copy` |
 
 ## Variant filtering
