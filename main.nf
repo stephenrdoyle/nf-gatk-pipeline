@@ -36,6 +36,7 @@ include { POOL_ANNOTATE       } from './modules/pool_annotate'
 include { ESTIMATE_HETEROZYGOSITY; HETEROZYGOSITY_SUMMARY } from './modules/heterozygosity'
 include { PREFLIGHT           } from './modules/preflight'
 include { SOFTWARE_VERSIONS   } from './modules/software_versions'
+include { QC_EXTRACT; QC_SNPRELATE; QC_REPORT } from './modules/qc'
 
 // ---------------------------------------------------------------------------
 // Parameter defaults: defined once, in the params block of nextflow.config
@@ -60,6 +61,30 @@ if (!(params.genotype_window_size instanceof Number) || params.genotype_window_s
 if (params.heterozygosity != null && params.heterozygosity != 'auto' &&
         !(params.heterozygosity instanceof Number && params.heterozygosity > 0 && params.heterozygosity < 1)) {
     error "ERROR: --heterozygosity must be 'auto' or a number between 0 and 1 (got ${params.heterozygosity})"
+}
+
+// Guard: QC contigs
+// --sex_chrom / --mito_chrom: one contig, or a comma-separated list (an X or
+// mitochondrion assembled as several contigs)
+def contig_list(v) {
+    (v == null || v == false || v == true) ? [] : v.toString().tokenize(',')*.trim().findAll { it }
+}
+if (params.sex_chrom == true || params.mito_chrom == true) {
+    error "ERROR: --sex_chrom and --mito_chrom need contig names, e.g. --sex_chrom chrX or --sex_chrom chrX_1,chrX_2"
+}
+def bad_contig_names = (contig_list(params.sex_chrom) + contig_list(params.mito_chrom)).findAll { !(it ==~ /[^\s'",]+/) }
+if (bad_contig_names) {
+    error "ERROR: contig names in --sex_chrom/--mito_chrom can't contain spaces or quotes: ${bad_contig_names.join(', ')}"
+}
+def both = contig_list(params.sex_chrom).intersect(contig_list(params.mito_chrom))
+if (both) {
+    error "ERROR: contig(s) given as both --sex_chrom and --mito_chrom: ${both.join(', ')}"
+}
+if (!(params.qc_ld_threshold instanceof Number && params.qc_ld_threshold > 0 && params.qc_ld_threshold <= 1)) {
+    error "ERROR: --qc_ld_threshold is an r² between 0 and 1 (got ${params.qc_ld_threshold})"
+}
+if (!(params.qc_maf instanceof Number && params.qc_maf >= 0 && params.qc_maf < 0.5)) {
+    error "ERROR: --qc_maf must be a number from 0 to 0.5 (got ${params.qc_maf})"
 }
 
 // Guard: site filters (see modules/site_filter.nf)
@@ -118,6 +143,12 @@ def preflight_launch_checks() {
         // duplicates would overwrite each other's GVCFs, silently losing a sample
         def dups = ids.countBy { it }.findAll { id, n -> id && n > 1 }.keySet()
         if (dups) problems << "duplicate sample_ids: ${dups.take(5).join(', ')}"
+        // optional 'sex' column, read by the QC report's chrX check
+        if ('sex' in cols) {
+            def bad = rows.findAll { r -> !((r.sex ?: '').trim().toLowerCase() in ['m', 'male', '1', 'f', 'female', '2', '', 'na', 'unknown', '0']) }
+            if (bad) problems << "'sex' must be M, F, male, female, 1, 2 or blank/NA/unknown: " +
+                                 bad.take(5).collect { "${it.sample_id}=${it.sex}" }.join(', ')
+        }
 
         rows.each { row ->
             def bam = file(row.bam)
@@ -210,6 +241,13 @@ workflow {
         }
     }
 
+    // --- End-of-run QC report: not in pooled mode, where per-sample
+    //     genotypes (and so PCA, kinship and sex checks) are meaningless ---
+    def run_qc = params.qc_report && !params.pooled
+    if (params.qc_report && params.pooled) {
+        log.warn "No QC report in pooled mode: per-sample genotypes aren't meaningful for PCA, kinship or sex checks"
+    }
+
     // --- 0. Reference files ---
     reference = file(params.reference, checkIfExists: true)
 
@@ -238,7 +276,9 @@ workflow {
             .map { sample_id, bam, bai -> "${sample_id}\t${bam}" }
             .collect()
             .map { it.join('\n') },
-        reference_fai
+        reference_fai,
+        run_qc ? ( contig_list(params.sex_chrom).collect { "--sex_chrom=${it}" } + contig_list(params.mito_chrom).collect { "--mito_chrom=${it}" } ).join(' ') : '',
+        run_qc
     )
     raw_bams = parse_samplesheet(params.samplesheet)
         .combine(PREFLIGHT.out.ok)
@@ -396,8 +436,8 @@ workflow {
     GENOTYPE_FILTER(cohort_vcf)
     geno_filtered_vcf = GENOTYPE_FILTER.out.filtered_vcf
 
-    // --- 10. Site filters (hard or custom, plus optional depth, missingness
-    //     and ExcessHet), one pass; also the filter summary and diagnostics ---
+    // --- 10. Site filters (hard or custom, plus the depth ceiling and optional
+    //     ExcessHet), one pass; also the filter summary and diagnostics ---
     SITE_FILTER(geno_filtered_vcf)
     merged_vcf = SITE_FILTER.out.filtered_vcf
 
@@ -431,7 +471,68 @@ workflow {
         .collect()
     MULTIQC(multiqc_files)
 
-    // --- 14. Cleanup intermediate work directories (opt-in) ---
+    // --- 14. Cohort QC report (<outdir>/qc_report.html) ---
+    // PASS sites of the filtered VCF: nuclear PCA, kinship, per-sample
+    // outliers, and the optional chrX and mito checks (--sex_chrom,
+    // --mito_chrom). See modules/qc.nf.
+    if (run_qc) {
+        QC_EXTRACT(merged_vcf, contig_list(params.sex_chrom).join(','), contig_list(params.mito_chrom).join(','), params.qc_maf)
+        QC_SNPRELATE(QC_EXTRACT.out.nuclear, QC_EXTRACT.out.mito, params.qc_ld_threshold,
+                     file("${projectDir}/bin/qc_snprelate.R", checkIfExists: true))
+
+        // sample, sex, group from the samplesheet (sex and group optional)
+        def sheet_rows = file(params.samplesheet).splitCsv(header: true)
+        def samples_tsv = (['sample\tsex\tgroup'] + sheet_rows.collect { r ->
+            [ r.sample_id, (r.sex ?: '').trim(), (r.group ?: '').trim() ].join('\t')
+        }).join('\n')
+
+        // Completeness: samples, and joint-genotyping pieces per contig,
+        // expected (from the intervals) and actually gathered into the cohort
+        // VCF; contigs and lengths in reference (.fai) order
+        def piece_contig = genotype_pieces.map { group_id, part_id, iv -> [ part_id, iv.substring(0, iv.lastIndexOf(':')) ] }
+        def expected_by_contig = piece_contig.map { part_id, contig -> contig }.toList().map { it.countBy { c -> c } }
+        def gathered_by_contig = genotyped_vcfs
+            .map { part_id, vcf, tbi -> [ part_id, true ] }
+            .join(piece_contig)
+            .map { part_id, ok, contig -> contig }
+            .toList()
+            .map { it.countBy { c -> c } }
+        def reference_contigs = reference_fai.map { fai ->
+            fai.readLines().findAll { it.trim() }.collect { l -> def f = l.split('\t'); [ f[0], f[1] as long ] }
+        }
+        qc_meta = n_samples
+            .combine(expected_by_contig)
+            .combine(gathered_by_contig)
+            .combine(reference_contigs.map { [ it ] })
+            .map { ns, exp, got, ref_contigs ->
+                groovy.json.JsonOutput.toJson([
+                    run_name           : workflow.runName,
+                    sex_chrom          : contig_list(params.sex_chrom).join(','),
+                    mito_chrom         : contig_list(params.mito_chrom).join(','),
+                    qc_maf             : params.qc_maf,
+                    qc_ld_threshold    : params.qc_ld_threshold,
+                    filter_mode        : params.filter_mode,
+                    n_samples_expected : ns,
+                    n_pieces_expected  : exp.values().sum() ?: 0,
+                    n_pieces_gathered  : got.values().sum() ?: 0,
+                    // [ name, length, pieces expected, pieces gathered ] per reference contig
+                    contigs            : ref_contigs.collect { name, len -> [ name, len, exp[name] ?: 0, got[name] ?: 0 ] },
+                ])
+            }
+
+        qc_inputs = QC_EXTRACT.out.stats
+            .mix(QC_EXTRACT.out.density,
+                 QC_SNPRELATE.out.pca, QC_SNPRELATE.out.kinship,
+                 QC_SNPRELATE.out.counts, QC_SNPRELATE.out.notes,
+                 BCFTOOLS_STATS_RAW.out.stats, BCFTOOLS_STATS_FILTERED.out.stats,
+                 SAMPLE_MISSINGNESS_FILTERED.out.missingness,
+                 SITE_FILTER.out.summary, SOFTWARE_VERSIONS.out.versions)
+            .flatten()
+            .collect()
+        QC_REPORT(qc_inputs, samples_tsv, qc_meta)
+    }
+
+    // --- 15. Cleanup intermediate work directories (opt-in) ---
     // One output per task is enough: CLEANUP empties the task directory
     // that produced it. Validated BAMs are deliberately not included.
     if (params.cleanup) {

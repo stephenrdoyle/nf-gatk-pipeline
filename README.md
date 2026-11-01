@@ -56,6 +56,7 @@ F2_001,/lustre/.../F2_001.bam
 F2_002,/lustre/.../F2_002.bam
 ```
 
+- Optional `sex` (`M`/`F`/`male`/`female`/`1`/`2`, blank or `NA` if unknown) and `group` columns are used only by the [QC report](#qc-report): `sex` is checked against chrX, and `group` colours the PCA.
 - An optional `bai` column gives the index path explicitly. Otherwise the pipeline looks for `<bam>.bai`, then `<bam without .bam>.bai`.
 - `sample_id` names the sample in the output VCF, whatever the BAM's `SM` tag says.
 - BAMs whose header is already valid are symlinked, not copied, so keep the original BAMs in place for as long as you might want to `-resume`.
@@ -120,6 +121,11 @@ Defaults are defined in one place: the `params` block of `nextflow.config`.
 | `--use_gnarly` | `false` | Joint-genotype with GnarlyGenotyper instead of GenotypeGVCFs |
 | `--pooled` | `false` | Samples are pools, not individuals (see [Modes](#modes)) |
 | `--cleanup` | `false` | Empty intermediate work directories at the end (see [Cleanup](#cleanup)) |
+| `--qc_report` | `true` | Write the cohort QC report, `qc_report.html` (not in pooled mode) |
+| `--sex_chrom` | — | Sex chromosome contig (e.g. X), or a comma-separated list if it is assembled as several contigs (`chrX_1,chrX_2`). Adds the chrX sex check, and leaves it out of the PCA/kinship |
+| `--mito_chrom` | — | Mitochondrial contig, or a comma-separated list. Adds the mito PCA and heteroplasmy check, and leaves it out of the PCA/kinship |
+| `--qc_maf` | `0.05` | Minor allele frequency for the PCA/kinship SNPs |
+| `--qc_ld_threshold` | `0.2` | LD pruning for the PCA/kinship SNPs, as r² (SNPs within 500 kb more correlated than this are thinned). Skipped below 20 samples, where LD can't be estimated |
 | `--publish_mode` | `link` | How result VCFs are published: `link` (hard link: no extra space, index timestamps stay correct; needs `--outdir` on the same filesystem as `work/`, checked at launch) or `copy` |
 
 ## Variant filtering
@@ -147,7 +153,7 @@ A site missing an annotation passes that filter, as in GATK.
 
 | Option | Flags | Catches | Caution |
 |---|---|---|---|
-| `--max_depth 2x` (default) | `HighDepth`: INFO/DP above 2 × the median site depth (SNPs and indels separately), or a fixed number | Collapsed repeats and duplications | On F2 it flagged 1.1% of SNPs. A fifth of them sat in 57 blocks of 100 kb (2% of the genome), and they were 10× more often ExcessHet than chance: paralogs, not noise. Being relative to the cohort's own median, it adapts to any coverage or cohort size. `false` turns it off |
+| `--max_depth 2x` (default) | `HighDepth`: INFO/DP above 2 × the median site depth (SNPs and indels separately), or a fixed number | Collapsed repeats and duplications | On F2 it flagged 1.1% of SNPs. A fifth of them sat in 57 blocks of 100 kb (2% of the genome), and they were 10× more often ExcessHet than chance: paralogs, not noise. Being relative to the cohort's own median, it adapts to any coverage or cohort size. Contigs given as `--mito_chrom` are exempt: the mitochondrion's many copies put every site far above 2×. `false` turns it off |
 | `--excess_het` | `ExcessHet`: GATK's ExcessHet above 54.69 | Paralogs (nearly every sample heterozygous) | **Never for F1 crosses**: at sites where the two parental strains carry different fixed alleles, every F1 is heterozygous, so ExcessHet would remove the most informative sites. Whether the parents were single individuals or pools, as for MF13 × MF22/MH21, doesn't matter. F2s are fine: F1s mating among themselves give roughly Hardy–Weinberg proportions, and combining crosses only lowers heterozygosity |
 
 **Missingness is reported, not filtered on.** How many uncalled samples a site can have depends on the analysis: linkage maps need nearly complete sites, while PCA or selection scans tolerate more. So the pipeline reports it, and you filter for each analysis:
@@ -194,6 +200,7 @@ results/
 ├── bcftools_stats/                        before_filter (all sites) / after_filter (PASS sites)
 ├── missingness/                           per-sample missing and low-DP genotypes:
 │                                          before_filter (all sites) / after_filter (PASS sites)
+├── qc_report.html                         cohort QC: samples, PCA, kinship, sex, mito (see below)
 ├── multiqc/multiqc_report.html            QC summary
 ├── pipeline_info/software_versions.txt    tool and module versions, git commit, command line
 ├── pipeline_trace_<timestamp>.txt         one row per task attempt (see below)
@@ -202,6 +209,27 @@ results/
 ```
 
 Every VCF has a `.tbi` index alongside it. The genotype-masked VCF between steps 1 and 2 isn't published: the final VCF has exactly the same genotypes, plus the `FILTER` column. To try different site filters, use the final VCF as the input (`benchmarks/filter_comparison/site_filter_standalone.sh` replaces its `FILTER` column); for different genotype thresholds, start from `1_genotyped`. Result VCFs are hard links to the files in `work/` (`--publish_mode link`), so they take no extra space. `run_pipeline.sh` writes the Nextflow report and timeline (plus a DAG) to `results/reports/` instead of the top level.
+
+## QC report
+
+`qc_report.html` is one self-contained file (no JavaScript or internet needed): open it anywhere, or attach it to an email. Hover over a point to see its sample. Everything is computed from the PASS sites of `cohort.filtered.vcf.gz`.
+
+It starts with what would invalidate the cohort VCF, each marked ✓ or ✗:
+
+- **Samples**: every samplesheet sample is in the VCF.
+- **Genome**: every joint-genotyping piece was gathered.
+- **Duplicates**: sample pairs with KING kinship above 0.354 (the same individual, or a sample swap).
+- **Sex** (with `--sex_chrom`): chrX heterozygosity against the samplesheet's `sex` column. One X gives almost no heterozygous chrX calls, so a chrX/autosome heterozygosity ratio ≤ 0.2 is called male and ≥ 0.35 female. The female cut-off is low because the X can be much less diverse than the autosomes: in the *H. contortus* F2, females ranged from 0.50 to 1.14.
+- **Mitochondria** (with `--mito_chrom`): samples with more than 20% of their non-reference mito calls heterozygous, which suggests contamination or a mixed sample.
+- **Per-sample flags**: samples far from the rest for missingness, depth, heterozygosity or singletons (robust z beyond ±4).
+
+Then: nuclear PCA (PC1–4, coloured by `group`), the kinship distribution, the chrX and mito plots, a per-sample table, variant counts and Ts/Tv before and after filtering, and PASS sites per Mb along the genome.
+
+The PCA and kinship use PASS biallelic SNPs with minor allele frequency ≥ `--qc_maf`, at most one per kb, then LD-pruned with [SNPRelate](https://bioconductor.org/packages/SNPRelate/) (run from a pinned Biocontainers image, `--snprelate_container`). `--sex_chrom` and `--mito_chrom` are optional; without them every contig counts as nuclear. For *H. contortus*:
+
+```bash
+--sex_chrom hcontortus_chrX_Celeg_TT_arrow_pilon --mito_chrom mitochondrion
+```
 
 ## Resources, retries and failures
 
@@ -254,7 +282,7 @@ main.nf               workflow
 nextflow.config       parameters, resources, retries, LSF executor, reports
 run_pipeline.sh       LSF submission script for farm22
 modules/              one process per file
-bin/                  scripts used by processes (filter thresholds and summary, pool annotation)
+bin/                  scripts used by processes (filter thresholds and summary, pool annotation, QC report)
 assets/               MultiQC configuration
 samplesheet.csv       example samplesheet
 MIGRATION.md          notes on the move from per-chromosome to 10 Mb interval scatter

@@ -115,6 +115,21 @@ class SiteFilterTest(unittest.TestCase):
         self.assertEqual(r.filters[30], "HighDepth")   # > 2 x indel median (100), not the SNP one
         self.assertEqual(r.filters[1], "PASS")
 
+    def test_mito_exempt_from_depth(self):
+        """Many copies per cell: every mito site is far above the nuclear
+        depth. Exempt contigs are never HighDepth and don't move the median."""
+        sites = [site(i, DP=1000) for i in range(1, 21)]
+        sites += [["mito", str(1000 + i), "A", "G"] + site(i, DP=60000)[4:] for i in range(3)]
+        r = Run(self.tmp, sites, max_depth="2x", depth_exempt="mito")
+        self.assertEqual(set(r.filters.values()), {"PASS"})
+        self.assertIn("not applied to mito", r.vcf)
+        dp = next(d for d in r.diag if d["rule"].startswith("DP > 2000 "))   # median from nuclear sites only
+        self.assertEqual(dp["n_flagged"], "0")
+        other = os.path.join(self.tmp, "no_exemption")
+        os.makedirs(other)
+        r2 = Run(other, sites, max_depth="2x")
+        self.assertEqual([r2.filters[1000 + i] for i in range(3)], ["HighDepth"] * 3)
+
     def test_max_depth_absolute(self):
         r = Run(self.tmp, [site(1, DP=500), site(2, DP=1500)], max_depth="1000")
         self.assertEqual((r.filters[1], r.filters[2]), ("PASS", "HighDepth"))

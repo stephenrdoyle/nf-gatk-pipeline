@@ -9,7 +9,9 @@
 #        -J site_filter -o site_filter_%J.out -e site_filter_%J.err \
 #        bash site_filter_standalone.sh <cohort.genotype_filtered.vcf.gz> <outdir> [site_filter.py options]
 #
-# Options are passed to site_filter.py apply, e.g. --excess-het true.
+# Options are passed to site_filter.py apply, e.g. --excess-het true
+# --depth-exempt mitochondrion (exempt the mito from the depth ceiling, as the
+# pipeline does for --mito_chrom).
 # Defaults match the pipeline: hard mode and --max-depth 2x (--max-depth false
 # turns the depth ceiling off).
 set -euo pipefail
