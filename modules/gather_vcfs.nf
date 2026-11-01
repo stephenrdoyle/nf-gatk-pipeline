@@ -15,7 +15,10 @@ process GATHER_VCFS {
      */
 
     label 'process_medium'
-    publishDir "${params.outdir}/variants", mode: params.publish_mode   // see publish_mode in nextflow.config
+    // Published as <cohort>.1_genotyped.vcf.gz (see 'Output' in the README);
+    // the work-directory name is unchanged, so renaming reruns nothing
+    publishDir "${params.outdir}/vcf", mode: params.publish_mode,   // see publish_mode in nextflow.config
+        saveAs: { fn -> fn.replace('cohort.genotyped', "${params.cohort}.1_genotyped") }
 
     input:
     path vcf_list    // all group_NNNN.genotyped.vcf.gz, name-sorted

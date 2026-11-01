@@ -21,7 +21,8 @@ process GENOTYPE_FILTER {
     tag "genotype_filter"
     label 'process_low'
 
-    publishDir "${params.outdir}", mode: params.publish_mode, pattern: "cohort.genotype_filtered.vcf.gz*"
+    // Not published: the final VCF (SITE_FILTER) has exactly these genotypes,
+    // plus the FILTER column, so a separate copy added nothing but size
 
     input:
     tuple path(vcf), path(tbi)

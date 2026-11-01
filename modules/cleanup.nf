@@ -8,7 +8,8 @@ process CLEANUP {
      *   - GENOMICS_DB_IMPORT      GenomicsDB workspaces
      *   - GENOTYPE_GVCFS/GNARLY   per-window genotyped VCFs
      *   - GATHER_VCFS             cohort.genotyped.vcf.gz (published copy kept)
-     *   - GENOTYPE_FILTER         cohort.genotype_filtered.vcf.gz (published copy kept)
+     *   - GENOTYPE_FILTER         cohort.genotype_filtered.vcf.gz (not published:
+     *                             the final VCF has the same genotypes)
      *
      * For each target's task directory, everything is deleted except the
      * .command.* logs, so failures stay debuggable.
@@ -27,7 +28,9 @@ process CLEANUP {
      *     to the original), and nothing is deleted unless that directory is
      *     exactly <workDir>/xx/<hash>
      *   - publishDir copies asynchronously, so a task directory holding a file
-     *     whose published copy is still a different size is skipped
+     *     whose published copy is still a different size is skipped. VCFs are
+     *     renamed on publishing (<cohort>.1_genotyped.vcf.gz, ...), so the
+     *     published name is looked up from published_names
      *
      * Runs locally — no LSF submission needed.
      */
@@ -41,17 +44,25 @@ process CLEANUP {
     path targets, stageAs: 'targets/*'    // one output (file or dir) per intermediate task
     val  work_dir                         // workflow.workDir
     val  outdir                           // absolute params.outdir
+    val  published_names                  // "work name<TAB>published name" lines
 
     output:
     val true, emit: done
 
     script:
     """
+    cat > published_names.tsv << 'NAMES'
+${published_names}
+NAMES
     python3 << 'PYEOF'
 import os, shutil
 
 work_root = os.path.realpath('${work_dir}')
 outdir    = os.path.realpath('${outdir}')
+
+# Work-directory name -> name it is published under, where they differ
+with open('published_names.tsv') as f:
+    renamed = dict(l.rstrip('\\n').split('\\t') for l in f if l.strip())
 
 # Sizes of every published file, by name
 published = {}
@@ -76,10 +87,10 @@ for d in sorted(task_dirs):
     entries = [e for e in os.listdir(d) if not keep(e)]
     unpublished = [
         e for e in entries
-        if e in published
+        if renamed.get(e, e) in published
         and not os.path.islink(os.path.join(d, e))
         and os.path.isfile(os.path.join(d, e))
-        and os.path.getsize(os.path.join(d, e)) not in published[e]
+        and os.path.getsize(os.path.join(d, e)) not in published[renamed.get(e, e)]
     ]
     if unpublished:
         print(f'SKIP published copy incomplete for {unpublished}: {d}')
