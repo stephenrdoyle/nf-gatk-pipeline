@@ -124,21 +124,6 @@ class QcReportTest(unittest.TestCase):
         self.assertNotIn("https://", html)
         self.assertIn("<svg", html)
 
-    def test_kinship_not_interpreted_in_small_cohorts(self):
-        small = Cohort(os.path.join(self._tmp.name, "small"))
-        keep = SAMPLES[:5]
-        small.nuclear = {s: v for s, v in small.nuclear.items() if s in keep}
-        small.sex = {s: v for s, v in small.sex.items() if s in keep}
-        small.x = {s: v for s, v in small.x.items() if s in keep}
-        small.mito = {s: v for s, v in small.mito.items() if s in keep}
-        small.missing = {s: v for s, v in small.missing.items() if s in keep}
-        small.kin = [(a, b, 0.44) for i, a in enumerate(keep) for b in keep[i + 1:]]
-        small.meta["n_samples_expected"] = 5
-        small.ids = keep
-        html = small.build()
-        self.assertIn("<b>Duplicates:</b> not assessed: 5 samples", html)
-        self.assertNotIn("duplicate of", html)
-
     def test_duplicate_pair(self):
         self.c.kin[0] = ("S01", "S02", 0.49)
         html = self.c.build()

@@ -219,7 +219,7 @@ It starts with what would invalidate the cohort VCF, each marked ✓ or ✗:
 - **Samples**: every samplesheet sample is in the VCF.
 - **Genome**: every joint-genotyping piece was gathered.
 - **Duplicates**: sample pairs with KING kinship above 0.354 (the same individual, or a sample swap).
-- **Sex** (with `--sex_chrom`): chrX heterozygosity against the samplesheet's `sex` column. One X gives almost no heterozygous chrX calls, so a chrX/autosome heterozygosity ratio ≤ 0.25 is called male and ≥ 0.5 female.
+- **Sex** (with `--sex_chrom`): chrX heterozygosity against the samplesheet's `sex` column. One X gives almost no heterozygous chrX calls, so a chrX/autosome heterozygosity ratio ≤ 0.2 is called male and ≥ 0.35 female. The female cut-off is low because the X can be much less diverse than the autosomes: in the *H. contortus* F2, females ranged from 0.50 to 1.14.
 - **Mitochondria** (with `--mito_chrom`): samples with more than 20% of their non-reference mito calls heterozygous, which suggests contamination or a mixed sample.
 - **Per-sample flags**: samples far from the rest for missingness, depth, heterozygosity or singletons (robust z beyond ±4).
 

@@ -40,10 +40,9 @@ KING_DUPLICATE = 0.354   # KING kinship: duplicate / identical twin
 KING_FIRST = 0.177       # first degree (parent-offspring, full sibs)
 KING_SECOND = 0.0884
 KING_THIRD = 0.0442
-SEX_MALE_MAX = 0.25      # X/autosome heterozygosity ratio: <= male (one X)
-SEX_FEMALE_MIN = 0.5     #                                   >= female
-MIN_SAMPLES_FOR_KINSHIP = 20   # below this, the cohort-frequency SNP set is mostly rare
-                                # variants and KING kinship is biased upwards (5 F2s: 0.44)
+SEX_MALE_MAX = 0.2       # X/autosome heterozygosity ratio: <= male (one X: ~0, errors only)
+SEX_FEMALE_MIN = 0.35    # >= female. The X can be far less diverse than the autosomes
+                         # (H. contortus F2 females: 0.50-1.14), so not 0.5
 MITO_HET_MAX = 0.2       # heterozygous fraction of non-ref mito genotypes
 DENSITY_MAX_CONTIGS = 40 # density plot: contigs with the most sites, in genome order
 
@@ -377,8 +376,7 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
             flags[s].append(f"mito depth ratio outlier (z = {z:+.1f})")
 
     kin_rows = [(r["ID1"], r["ID2"], float(r["kinship"]), float(r["IBS0"])) for r in kin]
-    kinship_ok = len(samples) >= MIN_SAMPLES_FOR_KINSHIP
-    dups = [k for k in kin_rows if k[2] > KING_DUPLICATE] if kinship_ok else []
+    dups = [k for k in kin_rows if k[2] > KING_DUPLICATE]
     for a, b, k, _ in dups:
         flags.setdefault(a, []).append(f"duplicate of {b} (kinship {k:.2f})")
         flags.setdefault(b, []).append(f"duplicate of {a} (kinship {k:.2f})")
@@ -405,9 +403,7 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
     checks = [
         status(n_vcf == n_exp, f"<b>Samples:</b> {n_vcf:,} in the cohort VCF, {fmt(n_exp)} in the samplesheet"),
         status(pieces_got == pieces_exp, genome_line(pieces_got, pieces_exp, contigs)),
-        status(not dups, f"<b>Duplicates:</b> {len(dups)} sample pair(s) with KING kinship &gt; {KING_DUPLICATE}")
-        if kinship_ok else
-        status(None, f"<b>Duplicates:</b> not assessed: {len(samples)} samples (kinship needs ≥ {MIN_SAMPLES_FOR_KINSHIP})"),
+        status(not dups, f"<b>Duplicates:</b> {len(dups)} sample pair(s) with KING kinship &gt; {KING_DUPLICATE}"),
     ]
     if sexstats is not None:
         mism = [s for s in samples if any(f.startswith("sex mismatch") for f in flags[s])]
@@ -439,11 +435,6 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
 
     # 3. relatedness
     parts.append("<h2>Relatedness (KING-robust kinship)</h2>")
-    if not kinship_ok:
-        parts.append(f"<p class='note bad'>Only {len(samples)} samples: SNPs are chosen by allele frequency in "
-                     "this cohort, so with few samples they are mostly rare variants, and KING kinship comes out "
-                     f"biased upwards. Values are shown but not interpreted (no duplicate flags) below "
-                     f"{MIN_SAMPLES_FOR_KINSHIP} samples.</p>")
     deg = {}
     for _, _, k, _ in kin_rows:
         deg[king_degree(k)] = deg.get(king_degree(k), 0) + 1
@@ -522,8 +513,8 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
                  f"<li><b>Outliers</b>: robust z = (x − median) ÷ (1.4826 × MAD); flagged beyond ±{ROBUST_Z} (needs ≥ {MIN_SAMPLES_FOR_OUTLIERS} samples). "
                  "Missingness and singletons are flagged on the high side only.</li>"
                  "<li><b>Het rate</b>: heterozygous fraction of called genotypes at PASS variant sites on nuclear contigs (not per bp).</li>"
-                 f"<li><b>Kinship</b>: SNPRelate KING-robust on all the thinned nuclear SNPs (LD adds noise, not bias); "
-                 f"not interpreted below {MIN_SAMPLES_FOR_KINSHIP} samples; duplicate &gt; {KING_DUPLICATE}, first degree &gt; {KING_FIRST}, "
+                 f"<li><b>Kinship</b>: SNPRelate KING-robust on all the thinned nuclear SNPs, not the LD-pruned set "
+                 "(LD adds noise, not bias; pruning in small cohorts selected odd SNPs and inflated kinship); duplicate &gt; {KING_DUPLICATE}, first degree &gt; {KING_FIRST}, "
                  f"second &gt; {KING_SECOND}, third &gt; {KING_THIRD}.</li>"
                  "<li><b>Per-sample depth, singletons</b>: bcftools stats (PSC) over PASS sites on nuclear contigs.</li></ul>")
     if versions:
