@@ -31,6 +31,7 @@ process SAMPLE_MISSINGNESS {
 
     script:
     def filter_arg = pass_only ? "--apply-filters 'PASS,.'" : ''
+    def dp_thr     = params.genotype_dp_threshold ?: 0
     """
     # Nextflow runs bash -ue only: without pipefail a bcftools failure in the
     # pipe below would leave empty low-DP counts and a task that "succeeded"
@@ -39,29 +40,39 @@ process SAMPLE_MISSINGNESS {
     # ── 1. per-sample called / missing genotypes: from ${stats} (input) ──────
     # ── 2. Low-depth genotypes (FORMAT/DP < --genotype_dp_threshold) per
     #       sample, split SNP / indel; nothing is counted if no threshold ──
-    # A site is a SNP when REF and every ALT allele are single bases
-    # (multiallelic SNPs included); anything else counts as an indel.
-    bcftools view --threads ${task.cpus} ${filter_arg} --no-header ${vcf} | \\
-        awk -v thr='${params.genotype_dp_threshold ?: 0}' '
-        BEGIN { OFS="\\t"; skip = (thr + 0 <= 0) }   # read all input (no early exit: SIGPIPE under pipefail)
-        {
-            if (skip) next
-            n_alt = split(\$5, alts, ",")
-            type = (length(\$4) == 1) ? "SNP" : "INDEL"
-            for (a = 1; a <= n_alt; a++)
-                if (length(alts[a]) != 1 || alts[a] == "*") type = "INDEL"
-
-            n = split(\$9, fmt_keys, ":")
-            dp_idx = 0
-            for (i = 1; i <= n; i++) if (fmt_keys[i] == "DP") { dp_idx = i; break }
-            if (dp_idx == 0) next   # no FORMAT/DP on this record
-
-            for (s = 10; s <= NF; s++) {
-                n_vals = split(\$s, vals, ":")
-                if (dp_idx <= n_vals && vals[dp_idx] != "." && vals[dp_idx] + 0 < thr + 0) print s - 9, type
-            }
-        }
-        ' > lowdp_hits.txt
+    # bcftools picks out the low-DP genotypes itself: with a FORMAT
+    # expression, query prints only the samples that match, so each output
+    # line is one site's REF, ALT and its low-DP samples. awk then only
+    # tallies those, instead of splitting every genotype of every site as
+    # text (about 9 billion fields for 200 samples x 44 M sites). A missing
+    # DP doesn't match, as before.
+    # SNP = REF and every ALT (ignoring the spanning deletion '*') single
+    # bases, the same rule as the site filter; anything else is an indel.
+    # A VCF without FORMAT/DP has nothing to count (the awk version skipped
+    # such records); bcftools would reject the expression outright. The
+    # header goes to a file first: grep -q would cut the pipe short, and
+    # under pipefail that SIGPIPE would read as "no DP".
+    bcftools view --header-only ${vcf} > header.txt
+    if [ ${dp_thr} -gt 0 ] && grep -q '^##FORMAT=<ID=DP,' header.txt; then
+        bcftools view --threads ${task.cpus} ${filter_arg} -Ou ${vcf} \\
+            | bcftools query -i 'FMT/DP<${dp_thr}' -f '%REF\\t%ALT[\\t%SAMPLE]\\n' \\
+            | awk 'BEGIN { FS = OFS = "\\t" }
+                {
+                    type = (length(\$1) == 1) ? "SNP" : "INDEL"
+                    n_alt = split(\$2, alts, ","); n_real = 0
+                    for (a = 1; a <= n_alt; a++) {
+                        if (alts[a] == "*") continue
+                        n_real++
+                        if (length(alts[a]) != 1) type = "INDEL"
+                    }
+                    if (n_real == 0) type = "INDEL"
+                    for (i = 3; i <= NF; i++) n[\$i SUBSEP type]++
+                }
+                END { for (k in n) { split(k, p, SUBSEP); print p[1], p[2], n[k] } }' \\
+            > lowdp_counts.tsv
+    else
+        : > lowdp_counts.tsv
+    fi
 
     # ── 3. sample names in VCF order ──────────────────────────────────────────
     bcftools query --list-samples ${vcf} > sample_names.txt
@@ -103,11 +114,13 @@ if total_sites is None:
 if set(samples) != set(sample_names):
     raise SystemExit(f'ERROR: bcftools stats has {len(samples)} samples, the VCF has {len(sample_names)}')
 
-with open('lowdp_hits.txt') as f:
+# lowdp_counts.tsv: sample, SNP|INDEL, number of low-DP genotypes
+with open('lowdp_counts.tsv') as f:
     for line in f:
-        idx, vtype = line.rstrip('\\n').split('\\t')
-        key = 'n_lowdp_snp' if vtype == 'SNP' else 'n_lowdp_indel'
-        samples[sample_names[int(idx) - 1]][key] += 1
+        sample, vtype, n = line.rstrip('\\n').split('\\t')
+        if sample not in samples:
+            raise SystemExit(f'ERROR: low-DP count for {sample}, which is not in the VCF')
+        samples[sample]['n_lowdp_snp' if vtype == 'SNP' else 'n_lowdp_indel'] += int(n)
 
 pct = lambda n: round(100 * n / total_sites, 4) if total_sites else 0
 with open(out_file, 'w') as f:
