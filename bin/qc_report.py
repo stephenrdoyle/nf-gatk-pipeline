@@ -389,8 +389,8 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
              f"<h1>Cohort QC report <span class='sub'>{esc(run)}</span></h1>",
              f"<p class='lede'>{len(samples):,} samples · "
              f"{fmt(after['SN'].get('number of records'))} PASS sites after filtering · "
-             f"sex contig: {esc(meta.get('sex_chrom') or 'not set')} · "
-             f"mito contig: {esc(meta.get('mito_chrom') or 'not set')}</p>"]
+             f"sex contig: {contig_label(meta.get('sex_chrom'))} · "
+             f"mito contig: {contig_label(meta.get('mito_chrom'))}</p>"]
 
     # 1. before the results
     n_exp, n_vcf = meta.get("n_samples_expected"), len(nuclear["PSC"])
@@ -448,7 +448,7 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
 
     # 4. sex chromosome
     if sexstats is not None:
-        parts.append(f"<h2>Sex chromosome ({esc(meta['sex_chrom'])})</h2>")
+        parts.append(f"<h2>Sex chromosome ({contig_label(meta['sex_chrom'])})</h2>")
         pts = [(m[s]["het"], m[s].get("x_ratio"), s, label_sex[s] or "unlabelled") for s in samples]
         cols = {"M": PALETTE[0], "F": PALETTE[1], "unlabelled": GREY}
         parts.append("<div class='row'><div>" + svg_scatter(pts, "autosomal heterozygosity", "chrX / autosome heterozygosity",
@@ -460,7 +460,7 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
 
     # 5. mitochondria
     if mitostats is not None:
-        parts.append(f"<h2>Mitochondria ({esc(meta['mito_chrom'])})</h2>")
+        parts.append(f"<h2>Mitochondria ({contig_label(meta['mito_chrom'])})</h2>")
         parts.append(f"<p class='note'>Maternal lineages: all {fmt(snp_counts.get('mito_input'))} biallelic PASS mito SNPs, no LD pruning. "
                      "Heteroplasmy = heterozygous fraction of non-reference mito calls; mito depth ratio = mito ÷ nuclear depth.</p>")
         parts.append(pca_panels(pca_m, eig_m, group, label_sex, pcs=((1, 2),)) if pca_m else "<p class='note'>No mito PCA (see notes above).</p>")
@@ -518,6 +518,16 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
         parts.append(f"<details><summary>Software versions and command</summary><pre>{esc(versions)}</pre></details>")
     parts.append("</body></html>")
     return "\n".join(parts)
+
+
+def contig_label(value) -> str:
+    """'chrX' | 'chrX_1, chrX_2, chrX_3' | '12 contigs: chrX_1, chrX_2, chrX_3, …' (comma-separated input)."""
+    names = [c for c in (value or "").split(",") if c]
+    if not names:
+        return "not set"
+    if len(names) <= 3:
+        return esc(", ".join(names))
+    return f"{len(names)} contigs: " + esc(", ".join(names[:3])) + ", …"
 
 
 def genome_line(got, exp, contigs) -> str:

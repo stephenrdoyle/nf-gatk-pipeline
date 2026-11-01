@@ -64,8 +64,21 @@ if (params.heterozygosity != null && params.heterozygosity != 'auto' &&
 }
 
 // Guard: QC contigs
-if (params.sex_chrom && params.sex_chrom == params.mito_chrom) {
-    error "ERROR: --sex_chrom and --mito_chrom are the same contig (${params.sex_chrom})"
+// --sex_chrom / --mito_chrom: one contig, or a comma-separated list (an X or
+// mitochondrion assembled as several contigs)
+def contig_list(v) {
+    (v == null || v == false || v == true) ? [] : v.toString().tokenize(',')*.trim().findAll { it }
+}
+if (params.sex_chrom == true || params.mito_chrom == true) {
+    error "ERROR: --sex_chrom and --mito_chrom need contig names, e.g. --sex_chrom chrX or --sex_chrom chrX_1,chrX_2"
+}
+def bad_contig_names = (contig_list(params.sex_chrom) + contig_list(params.mito_chrom)).findAll { !(it ==~ /[^\s'",]+/) }
+if (bad_contig_names) {
+    error "ERROR: contig names in --sex_chrom/--mito_chrom can't contain spaces or quotes: ${bad_contig_names.join(', ')}"
+}
+def both = contig_list(params.sex_chrom).intersect(contig_list(params.mito_chrom))
+if (both) {
+    error "ERROR: contig(s) given as both --sex_chrom and --mito_chrom: ${both.join(', ')}"
 }
 if (!(params.qc_ld_threshold instanceof Number && params.qc_ld_threshold > 0 && params.qc_ld_threshold <= 1)) {
     error "ERROR: --qc_ld_threshold is an r² between 0 and 1 (got ${params.qc_ld_threshold})"
@@ -264,8 +277,7 @@ workflow {
             .collect()
             .map { it.join('\n') },
         reference_fai,
-        run_qc ? [ sex_chrom: params.sex_chrom, mito_chrom: params.mito_chrom ]
-                     .findAll { k, v -> v }.collect { k, v -> "--${k}=${v}" }.join(' ') : '',
+        run_qc ? ( contig_list(params.sex_chrom).collect { "--sex_chrom=${it}" } + contig_list(params.mito_chrom).collect { "--mito_chrom=${it}" } ).join(' ') : '',
         run_qc
     )
     raw_bams = parse_samplesheet(params.samplesheet)
@@ -464,7 +476,7 @@ workflow {
     // outliers, and the optional chrX and mito checks (--sex_chrom,
     // --mito_chrom). See modules/qc.nf.
     if (run_qc) {
-        QC_EXTRACT(merged_vcf, params.sex_chrom ?: '', params.mito_chrom ?: '', params.qc_maf)
+        QC_EXTRACT(merged_vcf, contig_list(params.sex_chrom).join(','), contig_list(params.mito_chrom).join(','), params.qc_maf)
         QC_SNPRELATE(QC_EXTRACT.out.nuclear, QC_EXTRACT.out.mito, params.qc_ld_threshold,
                      file("${projectDir}/bin/qc_snprelate.R", checkIfExists: true))
 
@@ -495,8 +507,8 @@ workflow {
             .map { ns, exp, got, ref_contigs ->
                 groovy.json.JsonOutput.toJson([
                     run_name           : workflow.runName,
-                    sex_chrom          : params.sex_chrom ?: '',
-                    mito_chrom         : params.mito_chrom ?: '',
+                    sex_chrom          : contig_list(params.sex_chrom).join(','),
+                    mito_chrom         : contig_list(params.mito_chrom).join(','),
                     qc_maf             : params.qc_maf,
                     qc_ld_threshold    : params.qc_ld_threshold,
                     filter_mode        : params.filter_mode,

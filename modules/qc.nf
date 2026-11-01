@@ -8,7 +8,8 @@
  *                 with --mito_chrom, a mitochondrial PCA
  *   QC_REPORT     bin/qc_report.py: the HTML report
  *
- * --sex_chrom and --mito_chrom are optional. Set, their contigs are left out
+ * --sex_chrom and --mito_chrom are optional, each one contig or a
+ * comma-separated list (bcftools --regions/--targets take lists). Set, their contigs are left out
  * of the nuclear SNP set and stats, and get their own report sections
  * (chrX heterozygosity vs the samplesheet's sex column; mito PCA and
  * heteroplasmy). Unset, every contig counts as nuclear.
@@ -20,8 +21,8 @@ process QC_EXTRACT {
 
     input:
     tuple path(vcf), path(tbi)
-    val   sex_chrom    // contig name or ''
-    val   mito_chrom   // contig name or ''
+    val   sex_chrom    // contig name(s), comma-separated, or ''
+    val   mito_chrom   // contig name(s), comma-separated, or ''
     val   maf
 
     output:

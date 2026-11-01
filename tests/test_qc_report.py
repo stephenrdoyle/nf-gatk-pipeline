@@ -156,6 +156,14 @@ class QcReportTest(unittest.TestCase):
         checks = self.checks(self.c.build())
         self.assertIn("1 of 4 reference contigs are incomplete: chr1 (4 of 5)", checks)
 
+    def test_contig_lists(self):
+        self.assertEqual(qc_report.contig_label("chrX"), "chrX")
+        self.assertEqual(qc_report.contig_label("x1,x2"), "x1, x2")
+        self.assertEqual(qc_report.contig_label("a,b,c,d,e"), "5 contigs: a, b, c, …")
+        self.assertEqual(qc_report.contig_label(""), "not set")
+        self.c.meta["sex_chrom"] = "chrX_1,chrX_2"
+        self.assertIn("<h2>Sex chromosome (chrX_1, chrX_2)</h2>", self.c.build())
+
     def test_missing_piece_and_sample(self):
         self.c.meta["n_pieces_gathered"] = 11
         self.c.meta["n_samples_expected"] = 11

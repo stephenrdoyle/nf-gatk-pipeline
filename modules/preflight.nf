@@ -23,7 +23,7 @@ process PREFLIGHT {
     input:
     val  bam_list   // "sample_id<TAB>/abs/path.bam" lines, one per sample
     path fai
-    val  qc_contigs // "--sex_chrom=<name> --mito_chrom=<name>" (set ones only), or '' with the QC report off
+    val  qc_contigs // "--sex_chrom=<name> ... --mito_chrom=<name> ...", one per contig, or '' with the QC report off
     val  qc_report  // true: check what QC_EXTRACT needs
 
     output:
