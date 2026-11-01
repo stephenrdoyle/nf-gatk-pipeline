@@ -17,7 +17,7 @@
 # Writes (tab-separated):
 #   pca_nuclear.tsv        sample, PC1..PCn (n <= 10)
 #   pca_nuclear_eigen.tsv  pc, variance_explained
-#   kinship.tsv            ID1, ID2, IBS0, kinship   (KING-robust, all pairs)
+#   kinship.tsv            ID1, ID2, IBS0, kinship   (KING-robust, all pairs, all SNPs)
 #   pca_mito.tsv, pca_mito_eigen.tsv   only with a mito VCF
 #   snp_counts.tsv         set, n_snps   (input and after LD pruning)
 #   notes.txt              anything skipped, e.g. no polymorphic mito sites
@@ -78,8 +78,9 @@ if (counts$nuclear_input < 100) {
   empty_outputs()
 } else {
   n_samples <- length(read.gdsn(index.gdsn(g, "sample.id")))
+  all_snps  <- read.gdsn(index.gdsn(g, "snp.id"))
   if (n_samples < MIN_LD_SAMPLES) {
-    snps <- read.gdsn(index.gdsn(g, "snp.id"))
+    snps <- all_snps
     notes <- c(notes, sprintf(paste("LD pruning skipped: %d samples is too few to estimate LD (%d needed);",
                                     "PCA and kinship use all %d SNPs (one per kb)."),
                               n_samples, MIN_LD_SAMPLES, length(snps)))
@@ -93,7 +94,10 @@ if (counts$nuclear_input < 100) {
   pca <- snpgdsPCA(g, snp.id = snps, autosome.only = FALSE, num.thread = threads, verbose = FALSE)
   write_pca(pca, "pca_nuclear")
 
-  king <- snpgdsIBDKING(g, snp.id = snps, autosome.only = FALSE, num.thread = threads, verbose = FALSE)
+  # KING on every (thinned) SNP, not the LD-pruned set: LD adds noise to
+  # KING, not bias, and in a cross LD spans megabases, so pruning leaves few
+  # SNPs (1,123 of 22,974 on the 200-sample F2) and needlessly noisy kinship
+  king <- snpgdsIBDKING(g, snp.id = all_snps, autosome.only = FALSE, num.thread = threads, verbose = FALSE)
   pairs <- snpgdsIBDSelection(king)
   write_tsv(pairs[, c("ID1", "ID2", "IBS0", "kinship")], "kinship.tsv")
 }

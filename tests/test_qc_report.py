@@ -18,7 +18,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin"))
 import qc_report  # noqa: E402
 
-SAMPLES = [f"S{i:02d}" for i in range(1, 11)]
+SAMPLES = [f"S{i:02d}" for i in range(1, 21)]
 
 # bcftools 1.19 PSC layout (columns are read by name, not position)
 PSC_HEADER = ("# PSC\t[2]id\t[3]sample\t[4]nRefHom\t[5]nNonRefHom\t[6]nHets\t[7]nTransitions"
@@ -50,6 +50,7 @@ class Cohort:
 
     def __init__(self, tmp, sex_chrom="chrX", mito_chrom="mtDNA"):
         self.tmp, self.inputs = tmp, os.path.join(tmp, "inputs")
+        self.ids = list(SAMPLES)
         os.makedirs(self.inputs)
         self.nuclear = {s: (500, 200, 300, 20 + i % 3, 10) for i, s in enumerate(SAMPLES)}
         # half male (no chrX hets), half female
@@ -73,11 +74,11 @@ class Cohort:
             stats_file(p("stats_sex.txt"), self.x)
         if self.meta["mito_chrom"]:
             stats_file(p("stats_mito.txt"), self.mito)
-            tsv(p("pca_mito.tsv"), ["sample", "PC1", "PC2"], [(s, i * 0.1, -i * 0.05) for i, s in enumerate(SAMPLES)])
+            tsv(p("pca_mito.tsv"), ["sample", "PC1", "PC2"], [(s, i * 0.1, -i * 0.05) for i, s in enumerate(self.ids)])
             tsv(p("pca_mito_eigen.tsv"), ["pc", "variance_explained"], [("PC1", 0.6), ("PC2", 0.2)])
         tsv(p("after_filter_missingness.tsv"), ["sample", "pct_missing"], self.missing.items())
         tsv(p("pca_nuclear.tsv"), ["sample", "PC1", "PC2", "PC3", "PC4"],
-            [(s, (i % 5) * 0.1, (i % 3) * 0.1, (i % 4) * 0.1, (i % 2) * 0.1) for i, s in enumerate(SAMPLES)])
+            [(s, (i % 5) * 0.1, (i % 3) * 0.1, (i % 4) * 0.1, (i % 2) * 0.1) for i, s in enumerate(self.ids)])
         tsv(p("pca_nuclear_eigen.tsv"), ["pc", "variance_explained"],
             [("PC1", 0.1), ("PC2", 0.05), ("PC3", 0.04), ("PC4", 0.03)])
         tsv(p("kinship.tsv"), ["ID1", "ID2", "IBS0", "kinship"], [(a, b, 0.05, k) for a, b, k in self.kin])
@@ -92,7 +93,7 @@ class Cohort:
             f.write("pipeline: nf-gatk-pipeline\ngatk: 4.6.1.0\n")
         samples = os.path.join(self.tmp, "samples.tsv")
         tsv(samples, ["sample", "sex", "group"],
-            [(s, self.sex[s], "farmA" if i < 5 else "farmB") for i, s in enumerate(SAMPLES)])
+            [(s, self.sex[s], "farmA" if i < 5 else "farmB") for i, s in enumerate(self.ids)])
         return qc_report.build(self.inputs, samples, self.meta)
 
 
@@ -114,7 +115,7 @@ class QcReportTest(unittest.TestCase):
         checks = self.checks(html)
         self.assertNotIn('class="bad"', checks)
         self.assertIn("0 sample(s) flagged", checks)
-        self.assertIn("10 in the cohort VCF, 10 in the samplesheet", checks)
+        self.assertIn("20 in the cohort VCF, 20 in the samplesheet", checks)
 
     def test_self_contained(self):
         html = self.c.build()
@@ -122,6 +123,21 @@ class QcReportTest(unittest.TestCase):
         self.assertNotIn("http://", html)
         self.assertNotIn("https://", html)
         self.assertIn("<svg", html)
+
+    def test_kinship_not_interpreted_in_small_cohorts(self):
+        small = Cohort(os.path.join(self._tmp.name, "small"))
+        keep = SAMPLES[:5]
+        small.nuclear = {s: v for s, v in small.nuclear.items() if s in keep}
+        small.sex = {s: v for s, v in small.sex.items() if s in keep}
+        small.x = {s: v for s, v in small.x.items() if s in keep}
+        small.mito = {s: v for s, v in small.mito.items() if s in keep}
+        small.missing = {s: v for s, v in small.missing.items() if s in keep}
+        small.kin = [(a, b, 0.44) for i, a in enumerate(keep) for b in keep[i + 1:]]
+        small.meta["n_samples_expected"] = 5
+        small.ids = keep
+        html = small.build()
+        self.assertIn("<b>Duplicates:</b> not assessed: 5 samples", html)
+        self.assertNotIn("duplicate of", html)
 
     def test_duplicate_pair(self):
         self.c.kin[0] = ("S01", "S02", 0.49)
@@ -166,10 +182,10 @@ class QcReportTest(unittest.TestCase):
 
     def test_missing_piece_and_sample(self):
         self.c.meta["n_pieces_gathered"] = 11
-        self.c.meta["n_samples_expected"] = 11
+        self.c.meta["n_samples_expected"] = 21
         checks = self.checks(self.c.build())
         self.assertIn('class="bad"><span class="mark">✗</span> <b>Genome:</b> 11 of 12', checks)
-        self.assertIn('class="bad"><span class="mark">✗</span> <b>Samples:</b> 10 in the cohort VCF, 11', checks)
+        self.assertIn('class="bad"><span class="mark">✗</span> <b>Samples:</b> 20 in the cohort VCF, 21', checks)
 
     def test_missingness_outlier(self):
         self.c.missing["S05"] = 40.0
