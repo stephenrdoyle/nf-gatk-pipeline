@@ -60,7 +60,9 @@ class Cohort:
         self.kin = [(a, b, 0.0) for i, a in enumerate(SAMPLES) for b in SAMPLES[i + 1:]]
         self.meta = {"run_name": "test_run", "sex_chrom": sex_chrom, "mito_chrom": mito_chrom,
                      "qc_maf": 0.05, "qc_ld_threshold": 0.2, "n_samples_expected": len(SAMPLES),
-                     "n_pieces_expected": 12, "n_pieces_gathered": 12}
+                     "n_pieces_expected": 12, "n_pieces_gathered": 12,
+                     "contigs": [["chr1", 10_000_000, 5, 5], ["chrX", 6_000_000, 3, 3], ["mtDNA", 14_018, 1, 1],
+                                 ["chr2", 8_000_000, 3, 3]]}
 
     def build(self):
         p = lambda n: os.path.join(self.inputs, n)
@@ -137,6 +139,22 @@ class QcReportTest(unittest.TestCase):
         self.c.mito["S03"] = (10, 2, 6, 400, 0)
         html = self.c.build()
         self.assertIn("1 sample(s) with heterozygous mito calls", self.checks(html))
+
+    def test_genome_line_names_contigs(self):
+        checks = self.checks(self.c.build())
+        self.assertIn("12 of 12 joint-genotyping pieces gathered back into all 4 reference contigs (24.0 Mb)", checks)
+
+    def test_contig_table(self):
+        html = self.c.build()
+        self.assertIn("<h3>Contigs</h3>", html)
+        self.assertIn("<td>chr1</td><td>10.00 Mb</td><td>5 of 5</td><td>780</td><td>78</td>", html)  # 400+380 PASS sites
+        self.assertIn("<td>mtDNA</td><td>14,018 bp</td><td>1 of 1</td><td>0</td>", html)
+
+    def test_incomplete_contig_named(self):
+        self.c.meta["contigs"][0] = ["chr1", 10_000_000, 5, 4]
+        self.c.meta["n_pieces_gathered"] = 11
+        checks = self.checks(self.c.build())
+        self.assertIn("1 of 4 reference contigs are incomplete: chr1 (4 of 5)", checks)
 
     def test_missing_piece_and_sample(self):
         self.c.meta["n_pieces_gathered"] = 11

@@ -395,9 +395,13 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
     # 1. before the results
     n_exp, n_vcf = meta.get("n_samples_expected"), len(nuclear["PSC"])
     pieces_exp, pieces_got = meta.get("n_pieces_expected"), meta.get("n_pieces_gathered")
+    contigs = meta.get("contigs") or []      # [name, length, pieces expected, pieces gathered]
+    pass_by_contig = {}
+    for r in density:
+        pass_by_contig[r["contig"]] = pass_by_contig.get(r["contig"], 0) + int(r["n"])
     checks = [
         status(n_vcf == n_exp, f"<b>Samples:</b> {n_vcf:,} in the cohort VCF, {fmt(n_exp)} in the samplesheet"),
-        status(pieces_got == pieces_exp, f"<b>Genome:</b> {fmt(pieces_got)} of {fmt(pieces_exp)} joint-genotyping pieces gathered"),
+        status(pieces_got == pieces_exp, genome_line(pieces_got, pieces_exp, contigs)),
         status(not dups, f"<b>Duplicates:</b> {len(dups)} sample pair(s) with KING kinship &gt; {KING_DUPLICATE}"),
     ]
     if sexstats is not None:
@@ -493,6 +497,11 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
                           [[esc(r.get("variant_type")), esc(r.get("filter")), esc(r.get("expression")), fmt(_num(r.get("n_sites"))),
                             fmt(_num(r.get("pct_sites"))), fmt(_num(r.get("n_only")))] for r in filt]) if filt else "")
                  + "</div></div>")
+    if contigs:
+        parts.append("<h3>Contigs</h3><p class='note'>The cohort VCF is assembled from joint-genotyping pieces "
+                     "(slices of each contig) in reference order; every piece of a contig must be present for "
+                     "that contig to be complete.</p>")
+        parts.append(contig_table(contigs, pass_by_contig))
     parts.append("<h3>PASS sites per Mb along the genome</h3><p class='note'>Gaps are regions with no PASS sites "
                  "(e.g. assembly gaps, or a missing window); spikes often mark collapsed repeats.</p>")
     parts.append(svg_density(density))
@@ -509,6 +518,42 @@ def build(inputs: str, samples_tsv: str, meta: dict) -> str:
         parts.append(f"<details><summary>Software versions and command</summary><pre>{esc(versions)}</pre></details>")
     parts.append("</body></html>")
     return "\n".join(parts)
+
+
+def genome_line(got, exp, contigs) -> str:
+    """'145 of 145 joint-genotyping pieces gathered back into all 7 reference
+    contigs (283.4 Mb)', naming any contig with missing pieces."""
+    text = f"<b>Genome:</b> {fmt(got)} of {fmt(exp)} joint-genotyping pieces gathered"
+    if not contigs:
+        return text
+    total_bp = sum(c[1] for c in contigs)
+    incomplete = [c for c in contigs if c[3] < c[2]]
+    if not incomplete:
+        return text + f" back into all {len(contigs):,} reference contigs ({total_bp / 1e6:,.1f} Mb)"
+    names = ", ".join(f"{esc(c[0])} ({c[3]} of {c[2]})" for c in incomplete[:5])
+    more = f" and {len(incomplete) - 5:,} more" if len(incomplete) > 5 else ""
+    return (text + f"; {len(incomplete):,} of {len(contigs):,} reference contigs are incomplete: "
+            f"{names}{more}. Those regions are missing from the cohort VCF")
+
+
+def contig_table(contigs, pass_by_contig, max_rows=40) -> str:
+    """Per contig, in reference order: length, pieces gathered of expected,
+    PASS sites and PASS sites per Mb. Long contig lists (fragmented
+    assemblies) show the longest max_rows, plus any incomplete ones."""
+    rows = list(contigs)
+    note = ""
+    if len(rows) > max_rows:
+        keep = {c[0] for c in sorted(rows, key=lambda c: -c[1])[:max_rows]} | {c[0] for c in rows if c[3] < c[2]}
+        note = (f"<p class='note'>{len(rows) - len(keep):,} shorter contigs not listed "
+                f"(all complete unless shown above).</p>")
+        rows = [c for c in rows if c[0] in keep]
+    out = []
+    for name, length, exp, got in rows:
+        n = pass_by_contig.get(name, 0)
+        pieces = f"{got} of {exp}" if got == exp else f"<span class='bad'>{got} of {exp}</span>"
+        out.append([esc(name), f"{length / 1e6:,.2f} Mb" if length >= 1e5 else f"{length:,} bp", pieces,
+                    fmt(n), fmt(round(n / (length / 1e6), 1)) if length else "–"])
+    return table(["contig", "length", "pieces gathered", "PASS sites", "PASS sites per Mb"], out) + note
 
 
 def pca_panels(pca: list, eig: list, group: dict, label_sex: dict, pcs=((1, 2), (3, 4))) -> str:

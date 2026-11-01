@@ -474,11 +474,25 @@ workflow {
             [ r.sample_id, (r.sex ?: '').trim(), (r.group ?: '').trim() ].join('\t')
         }).join('\n')
 
-        // Completeness: samples and joint-genotyping pieces actually gathered
+        // Completeness: samples, and joint-genotyping pieces per contig,
+        // expected (from the intervals) and actually gathered into the cohort
+        // VCF; contigs and lengths in reference (.fai) order
+        def piece_contig = genotype_pieces.map { group_id, part_id, iv -> [ part_id, iv.substring(0, iv.lastIndexOf(':')) ] }
+        def expected_by_contig = piece_contig.map { part_id, contig -> contig }.toList().map { it.countBy { c -> c } }
+        def gathered_by_contig = genotyped_vcfs
+            .map { part_id, vcf, tbi -> [ part_id, true ] }
+            .join(piece_contig)
+            .map { part_id, ok, contig -> contig }
+            .toList()
+            .map { it.countBy { c -> c } }
+        def reference_contigs = reference_fai.map { fai ->
+            fai.readLines().findAll { it.trim() }.collect { l -> def f = l.split('\t'); [ f[0], f[1] as long ] }
+        }
         qc_meta = n_samples
-            .combine(genotype_pieces.count())
-            .combine(genotyped_vcfs.count())
-            .map { ns, pieces_expected, pieces_gathered ->
+            .combine(expected_by_contig)
+            .combine(gathered_by_contig)
+            .combine(reference_contigs.map { [ it ] })
+            .map { ns, exp, got, ref_contigs ->
                 groovy.json.JsonOutput.toJson([
                     run_name           : workflow.runName,
                     sex_chrom          : params.sex_chrom ?: '',
@@ -487,8 +501,10 @@ workflow {
                     qc_ld_threshold    : params.qc_ld_threshold,
                     filter_mode        : params.filter_mode,
                     n_samples_expected : ns,
-                    n_pieces_expected  : pieces_expected,
-                    n_pieces_gathered  : pieces_gathered,
+                    n_pieces_expected  : exp.values().sum() ?: 0,
+                    n_pieces_gathered  : got.values().sum() ?: 0,
+                    // [ name, length, pieces expected, pieces gathered ] per reference contig
+                    contigs            : ref_contigs.collect { name, len -> [ name, len, exp[name] ?: 0, got[name] ?: 0 ] },
                 ])
             }
 
