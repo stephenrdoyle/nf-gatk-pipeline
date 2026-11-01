@@ -52,6 +52,10 @@ process SITE_FILTER {
         ? "--mode custom ${opt('--snp-filters', params.snp_filters)} ${opt('--indel-filters', params.indel_filters)}"
         : '--mode hard'
     def excess_het = params.excess_het == true ? 'true' : params.excess_het
+    // The mitochondrion (--mito_chrom) is exempt from the depth ceiling: its
+    // many copies per cell put every site far above the nuclear depth
+    def depth_exempt = params.mito_chrom && params.mito_chrom != true
+        ? params.mito_chrom.toString().tokenize(',')*.trim().findAll { it }.join(',') : ''
     """
     set -o pipefail
 
@@ -68,6 +72,7 @@ process SITE_FILTER {
         --contigs contigs.txt \\
         ${rule_args} \\
         ${opt('--max-depth', params.max_depth)} \\
+        ${opt('--depth-exempt', depth_exempt)} \\
         ${opt('--excess-het', excess_het)} \\
         | bcftools view -Oz -o decisions.vcf.gz
     bcftools index --tbi decisions.vcf.gz

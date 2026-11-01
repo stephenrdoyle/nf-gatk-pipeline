@@ -158,6 +158,11 @@ def apply(a) -> None:
     if a.excess_het not in (None, "", "false", "null"):
         excess_het = EXCESS_HET_DEFAULT if a.excess_het == "true" else float(a.excess_het)
 
+    # contigs exempt from the depth ceiling (--depth-exempt: the mitochondrion,
+    # whose many copies per cell put every site far above the nuclear depth);
+    # they are also left out of the depth distribution the ceiling is based on
+    exempt = {c for c in (a.depth_exempt or "").split(",") if c}
+
     # pass 1: distributions (depth median for --max_depth Nx, and the diagnostics)
     dist = {t: {c: Counter() for c in cols[4:]} for t in ("snp", "indel")}
     n_type = Counter()
@@ -165,6 +170,8 @@ def apply(a) -> None:
         t = classify(f[2], f[3])
         n_type[t] += 1
         for c in cols[4:]:
+            if c == "DP" and f[0] in exempt:
+                continue
             v = num(f[idx[c]])
             if v is not None:
                 dist[t][c][int(v) if c == "DP" else round(v, 3 if c == "F_MISSING" else 2)] += 1
@@ -187,6 +194,8 @@ def apply(a) -> None:
     if depth:
         desc = (f"INFO/DP > {depth[1]:g} x median site depth (SNPs {fmt_n(depth_max.get('snp'))}, "
                 f"indels {fmt_n(depth_max.get('indel'))})" if depth[0] == "x" else f"INFO/DP > {depth[1]:g}")
+        if exempt:
+            desc += f"; not applied to {', '.join(sorted(exempt))}"
         defs["HighDepth"] = desc
     if excess_het is not None:
         defs["ExcessHet"] = f"ExcessHet > {excess_het:g}"
@@ -215,7 +224,7 @@ def apply(a) -> None:
             v = num(f[idx[ann]])
             if v is not None and OPS[op](v, val):
                 failed.append(name)
-        if depth and depth_max.get(t) is not None:
+        if depth and depth_max.get(t) is not None and f[0] not in exempt:
             v = num(f[idx["DP"]])
             if v is not None and v > depth_max[t]:
                 failed.append("HighDepth")
@@ -224,6 +233,8 @@ def apply(a) -> None:
             if v is not None and v > excess_het:
                 failed.append("ExcessHet")
         for i, (ann, op, val, *_rest) in enumerate(checks[t]):
+            if ann == "DP" and f[0] in exempt:
+                continue
             v = num(f[idx[ann]]) if ann in idx else None
             if v is not None and OPS[op](v, val):
                 flagged[t][i] += 1
@@ -487,6 +498,8 @@ def main(argv=None) -> int:
     s.add_argument("--snp-filters", dest="snp_filters", default="")
     s.add_argument("--indel-filters", dest="indel_filters", default="")
     s.add_argument("--max-depth", dest="max_depth", default=None)
+    s.add_argument("--depth-exempt", dest="depth_exempt", default="",
+                   help="comma-separated contigs never flagged HighDepth (e.g. the mitochondrion)")
     s.add_argument("--excess-het", dest="excess_het", default=None)
     s.add_argument("--expect-records", dest="expect_records", type=int, default=None)
     s.add_argument("--summary", default="filter_summary.tsv")
